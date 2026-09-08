@@ -31,13 +31,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [statusStep, setStatusStep] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
   const allowedExtensions = ['.pdf', '.txt', '.md', '.markdown'];
-  const maxFileSize = 20 * 1024 * 1024; // 20MB
+  const maxFileSize = 50 * 1024 * 1024; // 50MB
 
   const handleFileSelect = (selectedFile: File) => {
     setErrorMessage(null);
@@ -47,11 +48,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       return;
     }
     if (selectedFile.size > maxFileSize) {
-      setErrorMessage(`파일 크기는 최대 20MB를 초과할 수 없습니다. (현재: ${formatBytes(selectedFile.size)})`);
+      setErrorMessage(`파일 크기는 최대 50MB를 초과할 수 없습니다. (현재: ${formatBytes(selectedFile.size)})`);
       return;
     }
     setFile(selectedFile);
-    // 제목이 비어있으면 파일명 기본 입력 (확장자 제외)
     if (!title) {
       const baseName = selectedFile.name.replace(/\.[^/.]+$/, '');
       setTitle(baseName);
@@ -82,27 +82,81 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('title', title.trim());
-      formData.append('domain', domain);
-      if (source.trim()) formData.append('source', source.trim());
-      if (publisher.trim()) formData.append('publisher', publisher.trim());
-      if (publishedAt) formData.append('publishedAt', publishedAt);
-      if (documentType) formData.append('documentType', documentType);
-      if (sourceUrl.trim()) formData.append('sourceUrl', sourceUrl.trim());
-      if (keywords.trim()) formData.append('keywords', keywords.trim());
-      if (description.trim()) formData.append('description', description.trim());
+      const keywordsList = keywords
+        ? keywords.split(',').map((k) => k.trim()).filter(Boolean)
+        : [];
 
-      const res = await fetch('/api/documents/upload', {
+      // 1단계: Signed Upload URL 발급 요청 (메타데이터 선등록)
+      setStatusStep('업로드 준비 중 (Vercel 용량 제한 우회)...');
+      const prepRes = await fetch('/api/documents/prepare-upload', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          fileSize: file.size,
+          fileType: file.type || 'application/octet-stream',
+          title: title.trim(),
+          domain,
+          source,
+          publisher,
+          publishedAt,
+          documentType,
+          sourceUrl,
+          keywords: keywordsList,
+          description,
+        }),
       });
 
-      const data = await res.json();
+      const prepText = await prepRes.text();
+      let prepData: any;
+      try {
+        prepData = JSON.parse(prepText);
+      } catch {
+        if (prepRes.status === 413) {
+          throw new Error('요청 크기가 한도를 초과했습니다 (413 Payload Too Large).');
+        }
+        throw new Error(`서버 응답 오류 (${prepRes.status}): ${prepText.slice(0, 100)}`);
+      }
 
-      if (!res.ok) {
-        throw new Error(data.error || '자료 등록에 실패했습니다.');
+      if (!prepRes.ok) {
+        throw new Error(prepData.error || '업로드 준비에 실패했습니다.');
+      }
+
+      const { documentId, signedUrl } = prepData;
+
+      // 2단계: Supabase Storage로 다이렉트 바이너리 업로드 (Vercel 4.5MB 제한 우회)
+      if (signedUrl) {
+        setStatusStep(`스토리지로 파일 직접 전송 중 (${formatBytes(file.size)})...`);
+        const uploadRes = await fetch(signedUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+          },
+          body: file,
+        });
+
+        if (!uploadRes.ok) {
+          const upErr = await uploadRes.text();
+          throw new Error(`스토리지 직접 업로드 실패 (${uploadRes.status}): ${upErr.slice(0, 100)}`);
+        }
+      }
+
+      // 3단계: 텍스트 추출, 청킹 및 임베딩 인덱싱 실행
+      setStatusStep('텍스트 추출, 청킹 및 pgvector 인덱싱 중...');
+      const processRes = await fetch(`/api/documents/${documentId}/process`, {
+        method: 'POST',
+      });
+
+      const processText = await processRes.text();
+      let processData: any;
+      try {
+        processData = JSON.parse(processText);
+      } catch {
+        throw new Error(`인덱싱 응답 오류 (${processRes.status})`);
+      }
+
+      if (!processRes.ok) {
+        throw new Error(processData.error || '문서 인덱싱 처리에 실패했습니다.');
       }
 
       onSuccess();
@@ -112,6 +166,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       setErrorMessage(msg);
     } finally {
       setIsSubmitting(false);
+      setStatusStep(null);
     }
   };
 
@@ -128,7 +183,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               신규 건강지식 자료 등록
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              RAG 지식베이스에 저장하고 인덱싱할 문서를 업로드합니다. (PDF, TXT, MD)
+              스토리지 다이렉트 업로드를 통해 대용량 PDF/문서도 빠르게 인덱싱합니다.
             </p>
           </div>
           <button
@@ -144,9 +199,19 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         {/* 모달 폼 바디 */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto flex-1">
           {errorMessage && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-              <span>{errorMessage}</span>
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+              <div className="leading-relaxed font-medium">
+                {errorMessage}
+              </div>
+            </div>
+          )}
+
+          {/* 진행 상태 배너 */}
+          {statusStep && (
+            <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl text-xs text-sky-800 flex items-center gap-2.5 animate-pulse">
+              <Loader2 className="w-4 h-4 text-sky-600 animate-spin shrink-0" />
+              <span className="font-semibold">{statusStep}</span>
             </div>
           )}
 
@@ -193,7 +258,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                       {file.name}
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5">
-                      {formatBytes(file.size)} • 클릭하여 파일 변경
+                      {formatBytes(file.size)} • 클릭하여 파일 변경 (최대 50MB)
                     </div>
                   </div>
                 </div>
@@ -206,7 +271,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                     파일을 드래그하여 놓거나 클릭하여 선택하세요
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    지원 포맷: PDF, TXT, Markdown (최대 20MB)
+                    지원 포맷: PDF, TXT, Markdown (다이렉트 스토리지 업로드 지원)
                   </div>
                 </div>
               )}
@@ -364,12 +429,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  스토리지 저장 중...
+                  {statusStep || '저장 및 인덱싱 중...'}
                 </>
               ) : (
                 <>
                   <Upload className="w-3.5 h-3.5" />
-                  등록 및 저장
+                  등록 및 인덱싱
                 </>
               )}
             </button>

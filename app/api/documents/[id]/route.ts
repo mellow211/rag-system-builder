@@ -24,11 +24,15 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
       .eq('id', id)
       .single();
 
-    if (error || !document) {
-      return NextResponse.json({ error: '문서를 찾을 수 없습니다.' }, { status: 404 });
+    let downloadUrl: string | null = null;
+    if (document.storage_path) {
+      const { data: signedData } = await supabase.storage
+        .from('documents')
+        .createSignedUrl(document.storage_path, 3600);
+      downloadUrl = signedData?.signedUrl || null;
     }
 
-    return NextResponse.json({ document });
+    return NextResponse.json({ document, downloadUrl });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : '서버 오류';
     return NextResponse.json({ error: message }, { status: 500 });

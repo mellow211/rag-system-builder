@@ -3,7 +3,9 @@
 import React, { useState, useRef } from 'react';
 import { DomainType, DocumentType, DOMAIN_CONFIGS } from '@/types/rag';
 import { formatBytes } from '@/lib/utils';
-import { X, Upload, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { X, Upload, FileText, CheckCircle2, AlertCircle, Loader2, ScanLine, Sparkles } from 'lucide-react';
+import { runBrowserOcr, OcrProgress } from '@/lib/ocr/browser-ocr';
+import { OcrProcessingModal } from '@/components/documents/OcrProcessingModal';
 
 interface UploadModalProps {
   currentDomain: DomainType;
@@ -34,6 +36,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [statusStep, setStatusStep] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // OCR 연계 상태
+  const [scannedDocId, setScannedDocId] = useState<string | null>(null);
+  const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   if (!isOpen) return null;
 
@@ -156,6 +164,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       }
 
       if (!processRes.ok) {
+        if (processData?.error?.includes('스캔 이미지') || processData?.error?.includes('윤곽선')) {
+          setScannedDocId(documentId);
+        }
         throw new Error(processData.error || '문서 인덱싱 처리에 실패했습니다.');
       }
 
@@ -168,6 +179,69 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       setIsSubmitting(false);
       setStatusStep(null);
     }
+  };
+
+  const handleTriggerOcrFromModal = async () => {
+    if (!file || !scannedDocId) return;
+    setIsOcrModalOpen(true);
+    setErrorMessage(null);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    try {
+      const ocrResult = await runBrowserOcr(
+        file,
+        (progress) => setOcrProgress(progress),
+        abortController.signal
+      );
+
+      setOcrProgress({
+        currentPage: ocrResult.totalPages,
+        totalPages: ocrResult.totalPages,
+        stage: 'completed',
+        percent: 95,
+        statusMessage: '추출된 텍스트 단락 청킹 및 pgvector 임베딩 저장 중...',
+      });
+
+      const ingestRes = await fetch(`/api/documents/${scannedDocId}/ocr-ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pages: ocrResult.pages }),
+      });
+
+      const ingestData = await ingestRes.json();
+      if (!ingestRes.ok) {
+        throw new Error(ingestData.error || 'OCR 텍스트 저장 및 인덱싱 실패');
+      }
+
+      setOcrProgress({
+        currentPage: ocrResult.totalPages,
+        totalPages: ocrResult.totalPages,
+        stage: 'completed',
+        percent: 100,
+        statusMessage: `인덱싱 완료! 총 ${ingestData.chunksCount}개 청크가 성공적으로 생성되었습니다.`,
+      });
+
+      setTimeout(() => {
+        setIsOcrModalOpen(false);
+        onSuccess();
+        onClose();
+      }, 1200);
+    } catch (err: unknown) {
+      if (!abortController.signal.aborted) {
+        setErrorMessage(err instanceof Error ? err.message : 'OCR 처리 중 오류가 발생했습니다.');
+      }
+      setIsOcrModalOpen(false);
+    } finally {
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleCancelOcr = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsOcrModalOpen(false);
   };
 
   const docTypes: DocumentType[] = ['논문', '가이드라인', '공공기관 자료', '내부 문서', '기타'];
@@ -199,11 +273,28 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         {/* 모달 폼 바디 */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto flex-1">
           {errorMessage && (
-            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-              <div className="leading-relaxed font-medium">
-                {errorMessage}
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-3 shadow-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <div className="leading-relaxed font-medium">
+                  {errorMessage}
+                </div>
               </div>
+              {scannedDocId && file && (
+                <div className="pt-2.5 border-t border-rose-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/80 p-3 rounded-lg border border-rose-100">
+                  <span className="text-[11px] text-slate-700 leading-normal">
+                    💡 브라우저 내장 OCR 엔진으로 본문 텍스트를 자동 인식하여 등록을 완료할 수 있습니다.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleTriggerOcrFromModal}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs shadow-xs transition-colors shrink-0 cursor-pointer"
+                  >
+                    <ScanLine className="w-3.5 h-3.5" />
+                    ⚡ 바로 OCR로 등록하기
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -441,6 +532,15 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           </div>
         </form>
       </div>
+
+      {/* OCR 실행 모달 */}
+      <OcrProcessingModal
+        isOpen={isOcrModalOpen}
+        documentTitle={file ? file.name : title}
+        progress={ocrProgress}
+        onCancel={handleCancelOcr}
+        isCompleted={ocrProgress?.percent === 100}
+      />
     </div>
   );
 };

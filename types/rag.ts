@@ -126,6 +126,32 @@ export interface DocumentChunk {
   created_at: string;
 }
 
+export interface SearchResultScores {
+  vector?: number | null;
+  keyword?: number | null;
+  hybrid?: number | null;
+  rerank?: number | null;
+  final?: number | null;
+}
+
+export interface SearchResultRanks {
+  vector?: number | null;
+  keyword?: number | null;
+  hybrid?: number | null;
+  rerank?: number | null;
+  final?: number;
+}
+
+export interface SearchLatencyBreakdown {
+  queryRewriteMs?: number;
+  embeddingMs?: number;
+  vectorSearchMs?: number;
+  keywordSearchMs?: number;
+  fusionMs?: number;
+  rerankMs?: number;
+  totalMs: number;
+}
+
 export interface SearchResultItem {
   id: string;
   document_id: string;
@@ -138,11 +164,17 @@ export interface SearchResultItem {
     source?: string;
     publisher?: string;
     document_type?: string;
+    section?: string;
+    section_title?: string;
     [key: string]: unknown;
   };
   similarity: number;
   document_title?: string;
   document_source?: string;
+  domain?: DomainType;
+  section_title?: string | null;
+  scores?: SearchResultScores;
+  ranks?: SearchResultRanks;
 }
 
 export interface DomainStats {

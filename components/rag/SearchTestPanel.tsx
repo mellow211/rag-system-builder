@@ -2,18 +2,22 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { DomainType, DOMAIN_CONFIGS, SearchResultItem } from '@/types/rag';
+import { DomainType, DOMAIN_CONFIGS, SearchResultItem, SearchLatencyBreakdown } from '@/types/rag';
 import { SearchResultCard } from './SearchResultCard';
-import { 
-  Search, 
-  Sparkles, 
-  Filter, 
-  SlidersHorizontal, 
-  Loader2, 
-  AlertCircle, 
-  Clock, 
+import {
+  Search,
+  Sparkles,
+  Filter,
+  SlidersHorizontal,
+  Loader2,
+  AlertCircle,
+  Clock,
   HelpCircle,
-  RotateCcw
+  RotateCcw,
+  Terminal,
+  Activity,
+  Zap,
+  Layers,
 } from 'lucide-react';
 
 interface SearchTestPanelProps {
@@ -29,9 +33,14 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
   const [sourceFilter, setSourceFilter] = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
+  // Debug 모드 상태 (기본 활성화로 세부 스코어 및 지표 가시성 확보)
+  const [isDebugMode, setIsDebugMode] = useState(true);
+
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<SearchResultItem[] | null>(null);
   const [executionTime, setExecutionTime] = useState<number | null>(null);
+  const [latencyBreakdown, setLatencyBreakdown] = useState<SearchLatencyBreakdown | null>(null);
+  const [debugInfo, setDebugInfo] = useState<Record<string, unknown> | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // 도메인별 추천 질문 목록
@@ -93,10 +102,14 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
 
       setResults(data.results || []);
       setExecutionTime(data.executionTimeMs || 0);
+      setLatencyBreakdown(data.latencyBreakdown || null);
+      setDebugInfo(data.debugInfo || null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '검색 실패';
       setErrorMessage(msg);
       setResults([]);
+      setLatencyBreakdown(null);
+      setDebugInfo(null);
     } finally {
       setIsLoading(false);
     }
@@ -149,9 +162,25 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
 
         {/* 질문 입력 폼 */}
         <form onSubmit={handleSearch} className="space-y-3">
-          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-            검증 질문 입력
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+              검증 질문 입력
+            </label>
+            {/* Debug 모드 토글 버튼 */}
+            <button
+              type="button"
+              onClick={() => setIsDebugMode(!isDebugMode)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border ${
+                isDebugMode
+                  ? 'bg-slate-900 text-sky-300 border-slate-800 shadow-xs'
+                  : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              <span>Debug 상세 모드: {isDebugMode ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
           <div className="relative flex items-center">
             <Search className="w-4 h-4 text-slate-400 absolute left-4" />
             <input
@@ -165,7 +194,7 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
             <button
               type="submit"
               disabled={isLoading}
-              className="absolute right-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+              className="absolute right-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-xs cursor-pointer"
             >
               {isLoading ? (
                 <>
@@ -193,7 +222,7 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
                 onClick={() => {
                   setQuery(q);
                 }}
-                className="text-[11px] px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors font-medium"
+                className="text-[11px] px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors font-medium cursor-pointer"
               >
                 {q}
               </button>
@@ -205,7 +234,7 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
             <button
               type="button"
               onClick={() => setShowFilters(!showFilters)}
-              className="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-800 font-semibold"
+              className="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
               <span>메타데이터 필터 및 Top K 설정</span>
@@ -215,9 +244,10 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
             </button>
 
             {executionTime !== null && (
-              <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                소요시간: <strong>{executionTime}ms</strong>
+              <span className="text-[11px] text-slate-500 flex items-center gap-1.5 font-mono">
+                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                <span>Total Latency:</span>
+                <strong className="text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">{executionTime}ms</strong>
               </span>
             )}
           </div>
@@ -237,6 +267,7 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
                   <option value={3}>Top 3</option>
                   <option value={5}>Top 5 (기본)</option>
                   <option value={10}>Top 10</option>
+                  <option value={20}>Top 20 (후보 전체)</option>
                 </select>
               </div>
 
@@ -274,6 +305,65 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
         </form>
       </div>
 
+      {/* [DEBUG] Latency 계측 및 파이프라인 단계별 현황 바 */}
+      {isDebugMode && (latencyBreakdown || debugInfo) && (
+        <div className="p-4 rounded-xl bg-slate-900 text-slate-100 border border-slate-800 shadow-xs space-y-3 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-2">
+            <span className="font-bold text-sky-400 flex items-center gap-1.5">
+              <Zap className="w-4 h-4 text-amber-400" />
+              RAG Retrieval Pipeline Latency & Environment
+            </span>
+            <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+              <span>Mode: <strong className="text-slate-200">{(debugInfo?.mode as string) || 'vector-only'}</strong></span>
+              <span>•</span>
+              <span>Model: <strong className="text-slate-200">{(debugInfo?.embeddingModel as string) || 'mock-1536'}</strong></span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+            <div className="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/50">
+              <span className="text-[10px] text-slate-400 block font-semibold">1. Embedding</span>
+              <span className="text-sm font-mono font-bold text-emerald-400 mt-0.5 block">
+                {latencyBreakdown?.embeddingMs !== undefined ? `${latencyBreakdown.embeddingMs}ms` : '-'}
+              </span>
+              <span className="text-[9px] text-slate-500">질의 벡터화</span>
+            </div>
+
+            <div className="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/50">
+              <span className="text-[10px] text-slate-400 block font-semibold">2. Vector Search</span>
+              <span className="text-sm font-mono font-bold text-sky-400 mt-0.5 block">
+                {latencyBreakdown?.vectorSearchMs !== undefined ? `${latencyBreakdown.vectorSearchMs}ms` : '-'}
+              </span>
+              <span className="text-[9px] text-slate-500">pgvector HNSW</span>
+            </div>
+
+            <div className="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/50">
+              <span className="text-[10px] text-slate-400 block font-semibold">3. Keyword Search</span>
+              <span className="text-sm font-mono font-bold text-amber-400/80 mt-0.5 block">
+                {latencyBreakdown?.keywordSearchMs !== undefined ? `${latencyBreakdown.keywordSearchMs}ms` : 'null'}
+              </span>
+              <span className="text-[9px] text-slate-500">Phase 3 예정</span>
+            </div>
+
+            <div className="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/50">
+              <span className="text-[10px] text-slate-400 block font-semibold">4. Rerank / Fusion</span>
+              <span className="text-sm font-mono font-bold text-fuchsia-400/80 mt-0.5 block">
+                {latencyBreakdown?.rerankMs !== undefined ? `${latencyBreakdown.rerankMs}ms` : 'null'}
+              </span>
+              <span className="text-[9px] text-slate-500">Phase 4~5 예정</span>
+            </div>
+
+            <div className="bg-slate-800 p-2.5 rounded-lg border border-sky-500/40 col-span-2 sm:col-span-1">
+              <span className="text-[10px] text-sky-300 block font-bold">★ Total Latency</span>
+              <span className="text-base font-mono font-bold text-white mt-0.5 block">
+                {latencyBreakdown?.totalMs ?? executionTime ?? 0}ms
+              </span>
+              <span className="text-[9px] text-sky-400">전체 소요시간</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 2. 에러 알림 */}
       {errorMessage && (
         <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
@@ -292,7 +382,11 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
                 총 {results.length}건 반환
               </span>
             </h2>
-            <span className="text-xs text-slate-400">코사인 유사도(Cosine Distance) 순 정렬</span>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <span>{isDebugMode ? 'Debug 모드 활성화됨' : '일반 모드'}</span>
+              <span>•</span>
+              <span>코사인 유사도(Cosine Distance) 순</span>
+            </div>
           </div>
 
           {results.length === 0 ? (
@@ -306,7 +400,12 @@ export const SearchTestPanel: React.FC<SearchTestPanelProps> = ({ initialDomain 
           ) : (
             <div className="space-y-3">
               {results.map((item, idx) => (
-                <SearchResultCard key={item.id || idx} result={item} rank={idx + 1} />
+                <SearchResultCard
+                  key={item.id || idx}
+                  result={item}
+                  rank={idx + 1}
+                  isDebugMode={isDebugMode}
+                />
               ))}
             </div>
           )}

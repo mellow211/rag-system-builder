@@ -1,7 +1,7 @@
 import { getSupabaseAdmin, isSupabaseAdminConfigured } from '@/lib/supabase/admin';
 import { getEmbeddingProvider } from '@/lib/embedding';
 import { getProjectByDomain } from '@/lib/supabase/projects';
-import { DomainType, SearchResultItem } from '@/types/rag';
+import { DomainType, SearchResultItem, SearchLatencyBreakdown } from '@/types/rag';
 
 export interface SearchFilters {
   documentType?: string;
@@ -23,6 +23,8 @@ export interface VectorSearchResult {
   topK: number;
   results: SearchResultItem[];
   executionTimeMs: number;
+  latencyBreakdown?: SearchLatencyBreakdown;
+  debugInfo?: Record<string, unknown>;
 }
 
 export class VectorSearchService {
@@ -39,9 +41,11 @@ export class VectorSearchService {
       throw new Error(`도메인 프로젝트를 찾을 수 없습니다: ${domain}`);
     }
 
-    // 1. 사용자 질문 텍스트 임베딩 생성
+    // 1. 사용자 질문 텍스트 임베딩 생성 및 시간 측정
+    const embedStartTime = Date.now();
     const embeddingProvider = getEmbeddingProvider();
     const queryEmbedding = await embeddingProvider.embedText(query.trim());
+    const embeddingMs = Date.now() - embedStartTime;
 
     if (!isSupabaseAdminConfigured()) {
       // Supabase 미연동 시 테스트용 Mock 유사도 결과 반환
@@ -116,7 +120,8 @@ export class VectorSearchService {
       metadataFilter.source = filters.source.trim();
     }
 
-    // 3. Supabase RPC match_document_chunks 호출
+    // 3. Supabase RPC match_document_chunks 호출 및 시간 측정
+    const vectorStartTime = Date.now();
     const { data: rawChunks, error: rpcErr } = await supabase.rpc('match_document_chunks', {
       query_embedding: queryEmbedding,
       match_threshold: threshold,
@@ -146,10 +151,14 @@ export class VectorSearchService {
         docMap = new Map(docs.map((d) => [d.id, { title: d.title, source: d.source }]));
       }
     }
+    const vectorSearchMs = Date.now() - vectorStartTime;
 
-    // 결과 매핑
-    const results: SearchResultItem[] = chunks.map((c: any) => {
+    // 결과 매핑 (Debug 스코어 및 랭크 포함)
+    const results: SearchResultItem[] = chunks.map((c: any, index: number) => {
       const doc = docMap.get(c.document_id);
+      const score = parseFloat((c.similarity || 0).toFixed(4));
+      const sectionTitle = (c.metadata?.section_title || c.metadata?.section || null) as string | null;
+
       return {
         id: c.id,
         document_id: c.document_id,
@@ -157,9 +166,25 @@ export class VectorSearchService {
         chunk_index: c.chunk_index,
         content: c.content,
         metadata: c.metadata || {},
-        similarity: parseFloat((c.similarity || 0).toFixed(4)),
+        similarity: score,
         document_title: doc?.title || '알 수 없는 문서',
         document_source: doc?.source || undefined,
+        domain,
+        section_title: sectionTitle,
+        scores: {
+          vector: score,
+          keyword: null,
+          hybrid: null,
+          rerank: null,
+          final: score,
+        },
+        ranks: {
+          vector: index + 1,
+          keyword: null,
+          hybrid: null,
+          rerank: null,
+          final: index + 1,
+        },
       };
     });
 
@@ -188,12 +213,26 @@ export class VectorSearchService {
       console.warn('검색 로그 기록 경고:', logErr);
     }
 
+    const totalMs = Date.now() - startTime;
+
     return {
       query,
       domain,
       topK,
       results,
-      executionTimeMs: Date.now() - startTime,
+      executionTimeMs: totalMs,
+      latencyBreakdown: {
+        embeddingMs,
+        vectorSearchMs,
+        totalMs,
+      },
+      debugInfo: {
+        mode: 'vector-only',
+        candidateCount: chunks.length,
+        embeddingProvider: embeddingProvider.providerName,
+        embeddingModel: embeddingProvider.modelName,
+        similarityMetric: 'cosine',
+      },
     };
   }
 }

@@ -106,14 +106,29 @@ export default async function DocumentDetailPage({ params }: DocumentPageProps) 
         domain = project.domain as DomainType;
       }
 
-      // 3. 청크 목록 조회
-      const { data: chunkData } = await supabase
+      // 3. 청크 목록 조회 (문서의 활성 chunking_version에 맞추어 우선 조회)
+      const docVersion = (document.metadata?.chunking_version as string) || 'v1';
+      let chunkQuery = supabase
         .from('document_chunks')
         .select('id, document_id, rag_project_id, chunk_index, content, token_count, metadata, created_at')
-        .eq('document_id', id)
-        .order('chunk_index', { ascending: true });
+        .eq('document_id', id);
 
-      chunks = (chunkData || []) as DocumentChunk[];
+      if (docVersion === 'v2') {
+        chunkQuery = chunkQuery.filter('metadata->>chunking_version', 'eq', 'v2');
+      }
+
+      const { data: chunkData } = await chunkQuery.order('chunk_index', { ascending: true });
+
+      if (chunkData && chunkData.length > 0) {
+        chunks = chunkData as DocumentChunk[];
+      } else {
+        const { data: fallbackChunks } = await supabase
+          .from('document_chunks')
+          .select('id, document_id, rag_project_id, chunk_index, content, token_count, metadata, created_at')
+          .eq('document_id', id)
+          .order('chunk_index', { ascending: true });
+        chunks = (fallbackChunks || []) as DocumentChunk[];
+      }
     } catch (e) {
       console.error('문서 상세 로딩 오류:', e);
       notFound();

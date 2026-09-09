@@ -13,16 +13,20 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       return NextResponse.json({ error: '문서 ID가 필요합니다.' }, { status: 400 });
     }
 
+    const body = await req.json().catch(() => ({}));
+    const version = (body.version as 'v1' | 'v2') || 'v2';
+
     if (!isSupabaseAdminConfigured()) {
       return NextResponse.json({
         success: true,
-        message: 'Mock 환경에서 재인덱싱이 완료되었습니다.',
+        message: `Mock 환경에서 ${version.toUpperCase()} 재인덱싱이 완료되었습니다.`,
         chunksCount: 3,
+        version,
       });
     }
 
-    // 파이프라인 재실행 (기존 청크 삭제 -> 재파싱 -> 재청킹 -> 임베딩 -> INDEXED)
-    const result = await ingestionPipeline.processDocumentChunks(id);
+    // 파이프라인 재실행 (지정된 버전으로 재파싱 -> 재청킹 -> 임베딩 -> INDEXED)
+    const result = await ingestionPipeline.processDocumentChunks(id, undefined, { version });
 
     if (!result.success) {
       return NextResponse.json(
@@ -33,9 +37,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     return NextResponse.json({
       success: true,
-      message: '재인덱싱이 성공적으로 완료되었습니다.',
+      message: `RAG ${version.toUpperCase()} 재인덱싱이 성공적으로 완료되었습니다.`,
       chunksCount: result.chunksCount,
+      parentChunksCount: result.parentChunksCount,
       totalTextLength: result.totalTextLength,
+      version: result.version,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : '서버 오류';

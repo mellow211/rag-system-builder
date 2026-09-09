@@ -13,7 +13,8 @@ import {
   Leaf,
   SunMoon,
   Stethoscope,
-  ChevronRight
+  ChevronRight,
+  BarChart3
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { DOMAIN_CONFIGS, DomainType } from '@/types/rag';
@@ -112,11 +113,11 @@ export const Sidebar: React.FC = () => {
           </div>
         </div>
 
-        {/* 검색 검증 테스트 섹션 */}
+        {/* 검색 검증 및 정량 평가 섹션 */}
         <div>
           <div className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
             <Search className="w-3.5 h-3.5" />
-            <span>RAG 검색 검증</span>
+            <span>RAG 검색 검증 및 평가</span>
           </div>
           <div className="space-y-1">
             <Link
@@ -129,7 +130,20 @@ export const Sidebar: React.FC = () => {
               )}
             >
               <Search className="w-4 h-4 text-sky-600" />
-              <span>검색 테스트</span>
+              <span>검색 테스트 (Debug)</span>
+            </Link>
+
+            <Link
+              href="/rag/evaluation"
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                pathname === '/rag/evaluation'
+                  ? 'bg-violet-50 text-violet-800 font-semibold border border-violet-200'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              )}
+            >
+              <BarChart3 className="w-4 h-4 text-violet-600" />
+              <span>RAG 성능 평가 (Hit@K/MRR)</span>
             </Link>
           </div>
         </div>

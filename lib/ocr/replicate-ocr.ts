@@ -87,23 +87,52 @@ export async function runReplicateMarkerOcr(
     throw new Error('Replicate OCR 처리 결과 텍스트가 비어 있습니다.');
   }
 
-  // 페이지 분할 처리 (Marker의 페이지 구분자: \f 또는 --- 또는 <!-- pagebreak -->)
+  // 페이지 분할 처리:
+  // Marker 모델의 표준 페이지 구분자: {0}------------------------------------------------
   const pages: ParsedPage[] = [];
-  const rawPages = markdownText.split(/\f|\n\s*---\s*\n|<!--\s*pagebreak\s*-->/);
+  const markerPageRegex = /\{(\d+)\}-+\s*/g;
+  let match: RegExpExecArray | null;
+  const indices: Array<{ pageNumber: number; startIndex: number; matchIndex: number }> = [];
 
-  if (rawPages.length > 1) {
-    rawPages.forEach((pText, idx) => {
-      const clean = pText.trim();
-      if (clean.length > 0) {
-        pages.push({
-          pageNumber: idx + 1,
-          text: clean,
-        });
-      }
+  while ((match = markerPageRegex.exec(markdownText)) !== null) {
+    indices.push({
+      pageNumber: parseInt(match[1], 10) + 1, // Marker의 0-based 인덱스를 1-based 페이지 번호로 변환
+      startIndex: match.index + match[0].length,
+      matchIndex: match.index,
     });
   }
 
-  // 페이지 구분자가 명확하지 않은 경우 단일 전체 페이지로 처리
+  if (indices.length > 0) {
+    for (let i = 0; i < indices.length; i++) {
+      const current = indices[i];
+      const next = indices[i + 1];
+      const text = markdownText
+        .substring(current.startIndex, next ? next.matchIndex : markdownText.length)
+        .trim();
+      if (text.length > 0) {
+        pages.push({
+          pageNumber: current.pageNumber,
+          text,
+        });
+      }
+    }
+  } else {
+    // 대체 페이지 구분자 (\f, <!-- pagebreak --> 등)
+    const rawPages = markdownText.split(/\f|<!--\s*pagebreak\s*-->/);
+    if (rawPages.length > 1) {
+      rawPages.forEach((pText, idx) => {
+        const clean = pText.trim();
+        if (clean.length > 0) {
+          pages.push({
+            pageNumber: idx + 1,
+            text: clean,
+          });
+        }
+      });
+    }
+  }
+
+  // 페이지 구분자가 전혀 없는 경우 단일 전체 페이지로 처리
   if (pages.length === 0) {
     pages.push({
       pageNumber: 1,

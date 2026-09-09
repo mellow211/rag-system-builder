@@ -1,14 +1,21 @@
 'use client';
 
 import React from 'react';
-import { OcrProgress } from '@/lib/ocr/browser-ocr';
-import { ScanLine, Loader2, XCircle, CheckCircle2, FileText, Sparkles } from 'lucide-react';
+import { ScanLine, Loader2, XCircle, CheckCircle2, FileText, Sparkles, Cpu } from 'lucide-react';
+
+export interface OcrModalProgress {
+  stage: 'preparing' | 'processing' | 'chunking' | 'completed' | 'error';
+  percent: number; // 0 ~ 100
+  statusMessage: string;
+  previewText?: string;
+  chunksCount?: number;
+}
 
 interface OcrProcessingModalProps {
   isOpen: boolean;
   documentTitle: string;
-  progress: OcrProgress | null;
-  onCancel: () => void;
+  progress: OcrModalProgress | null;
+  onCancel?: () => void;
   isCompleted?: boolean;
 }
 
@@ -22,7 +29,7 @@ export const OcrProcessingModal: React.FC<OcrProcessingModalProps> = ({
   if (!isOpen) return null;
 
   const percent = progress?.percent || 0;
-  const statusMessage = progress?.statusMessage || 'OCR 엔진 준비 중...';
+  const statusMessage = progress?.statusMessage || 'Replicate AI OCR 엔진 준비 중...';
   const previewText = progress?.previewText;
 
   return (
@@ -41,10 +48,10 @@ export const OcrProcessingModal: React.FC<OcrProcessingModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-slate-900 text-base">
-                  {isCompleted ? 'OCR 텍스트 추출 완료' : '브라우저 광학 문자 인식(OCR) 실행 중'}
+                  {isCompleted ? 'AI 문서 OCR 인덱싱 완료' : 'Replicate AI 문서 OCR (Marker) 실행 중'}
                 </h3>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-700">
-                  Tesseract WASM
+                  Marker AI
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5 truncate max-w-xs sm:max-w-sm">
@@ -53,7 +60,7 @@ export const OcrProcessingModal: React.FC<OcrProcessingModalProps> = ({
             </div>
           </div>
 
-          {!isCompleted && (
+          {!isCompleted && onCancel && (
             <button
               onClick={onCancel}
               className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg hover:bg-slate-100"
@@ -83,14 +90,10 @@ export const OcrProcessingModal: React.FC<OcrProcessingModalProps> = ({
               />
             </div>
 
-            {progress && progress.totalPages > 0 && (
-              <div className="flex justify-between text-[11px] text-slate-400">
-                <span>
-                  진행 페이지: {progress.currentPage} / {progress.totalPages}
-                </span>
-                <span>한국어(kor) + 영어(eng) 통합 모델</span>
-              </div>
-            )}
+            <div className="flex justify-between text-[11px] text-slate-400">
+              <span>엔진: datalab-to/marker (GPU 고속 변환)</span>
+              <span>다단/표/수식/아웃라인 폰트 복원</span>
+            </div>
           </div>
 
           {/* Live Text Preview */}
@@ -98,7 +101,7 @@ export const OcrProcessingModal: React.FC<OcrProcessingModalProps> = ({
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
                 <FileText className="w-3.5 h-3.5 text-slate-400" />
-                <span>최근 추출된 텍스트 실시간 미리보기</span>
+                <span>추출된 구조화 Markdown 본문 미리보기</span>
               </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-700 font-mono leading-relaxed line-clamp-3 select-none">
                 {previewText}
@@ -107,10 +110,10 @@ export const OcrProcessingModal: React.FC<OcrProcessingModalProps> = ({
           )}
 
           {/* Notice Box */}
-          <div className="p-3.5 bg-amber-50/70 rounded-xl border border-amber-200/80 flex items-start gap-2.5 text-xs text-amber-800 leading-relaxed">
-            <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="p-3.5 bg-violet-50/70 rounded-xl border border-violet-200/80 flex items-start gap-2.5 text-xs text-violet-900 leading-relaxed">
+            <Cpu className="w-4 h-4 text-violet-600 shrink-0 mt-0.5" />
             <div>
-              <strong>로컬 브라우저 구동 안내</strong>: 서버 타임아웃 방지를 위해 고객님의 브라우저 메모리에서 안전하게 분할 인식됩니다. OCR 처리 중에는 브라우저 탭을 닫지 마세요.
+              <strong>Replicate Cloud AI 연동</strong>: GPT-4o 대비 5배 이상 저렴한 전문 문서 AI 파서로 본문 텍스트를 마크다운 구조로 복원한 뒤, 슬라이딩 윈도우 청크 및 1536차원 벡터로 자동 인덱싱합니다.
             </div>
           </div>
         </div>
@@ -122,7 +125,7 @@ export const OcrProcessingModal: React.FC<OcrProcessingModalProps> = ({
               onClick={onCancel}
               className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-100 rounded-xl transition-all"
             >
-              작업 취소
+              닫기
             </button>
           ) : (
             <button

@@ -8,6 +8,7 @@ export default function SettingsPage() {
   const supabaseAdminConfigured = isSupabaseAdminConfigured();
   const embeddingProvider = process.env.EMBEDDING_PROVIDER || 'mock';
   const hasEmbeddingKey = !!process.env.EMBEDDING_API_KEY && process.env.EMBEDDING_API_KEY.length > 5;
+  const hasReplicateToken = !!process.env.REPLICATE_API_TOKEN && process.env.REPLICATE_API_TOKEN.length > 5;
 
   const envItems = [
     {
@@ -33,6 +34,12 @@ export default function SettingsPage() {
       desc: '임베딩 프로바이더 (openai / gemini / mock)',
       configured: embeddingProvider === 'mock' || hasEmbeddingKey,
       exposure: embeddingProvider === 'mock' ? 'Mock Test Mode' : 'Private (서버 전용)',
+    },
+    {
+      name: 'REPLICATE_API_TOKEN',
+      desc: 'Replicate AI 토큰 (datalab-to/marker 논문·문서 OCR 연동용, replicate.com/account/api-tokens)',
+      configured: hasReplicateToken,
+      exposure: 'Private (서버 전용, 절대 Client 미노출)',
     },
   ];
 

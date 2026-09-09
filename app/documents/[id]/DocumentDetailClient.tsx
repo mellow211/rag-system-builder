@@ -26,9 +26,9 @@ import {
   AlertCircle,
   ScanLine,
   Sparkles,
+  Cpu,
 } from 'lucide-react';
-import { runBrowserOcr, OcrProgress } from '@/lib/ocr/browser-ocr';
-import { OcrProcessingModal } from '@/components/documents/OcrProcessingModal';
+import { OcrProcessingModal, OcrModalProgress } from '@/components/documents/OcrProcessingModal';
 
 interface DocumentDetailClientProps {
   document: RagDocument;
@@ -55,9 +55,8 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
 
   // OCR 관련 상태
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
-  const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null);
+  const [ocrProgress, setOcrProgress] = useState<OcrModalProgress | null>(null);
   const [isOcrRunning, setIsOcrRunning] = useState(false);
-  const abortControllerRef = React.useRef<AbortController | null>(null);
 
   const config = DOMAIN_CONFIGS[domain];
 
@@ -88,83 +87,52 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
     }
   };
 
-  // 2. 브라우저 OCR 텍스트 추출 및 청크 재생성 핸들러
+  // 2. Replicate AI 문서 OCR (datalab-to/marker) 실행 핸들러
   const handleStartOcr = async () => {
     setIsOcrModalOpen(true);
     setIsOcrRunning(true);
     setActionNotice(null);
     setOcrProgress({
-      currentPage: 0,
-      totalPages: 0,
-      stage: 'initializing',
-      percent: 5,
-      statusMessage: '문서 정보 및 스토리지 다운로드 주소 확인 중...',
+      stage: 'preparing',
+      percent: 15,
+      statusMessage: 'Replicate 클라우드 AI (datalab-to/marker) 호출 중...',
     });
 
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    // 시각적 단계 업데이트 타이머
+    const timer = setInterval(() => {
+      setOcrProgress((prev) => {
+        if (!prev || prev.percent >= 85) return prev;
+        return {
+          ...prev,
+          percent: Math.min(prev.percent + 15, 85),
+          statusMessage: 'GPU에서 다단 레이아웃, 표, 수식 및 폰트 아웃라인 정밀 분석 중...',
+        };
+      });
+    }, 2000);
 
     try {
-      // 1. 다운로드 URL 가져오기
-      const docRes = await fetch(`/api/documents/${doc.id}`);
-      const docData = await docRes.json();
-      if (!docRes.ok || !docData.downloadUrl) {
-        throw new Error(docData.error || '스토리지 다운로드 URL을 생성할 수 없습니다.');
-      }
-
-      setOcrProgress({
-        currentPage: 0,
-        totalPages: 0,
-        stage: 'initializing',
-        percent: 10,
-        statusMessage: '스토리지에서 원본 PDF 파일 다운로드 중...',
-      });
-
-      // 2. 원본 PDF 다운로드
-      const fileRes = await fetch(docData.downloadUrl);
-      if (!fileRes.ok) {
-        throw new Error('스토리지에서 원본 PDF를 다운로드하지 못했습니다.');
-      }
-      const pdfBlob = await fileRes.blob();
-
-      // 3. 브라우저 WASM Tesseract OCR 실행
-      const ocrResult = await runBrowserOcr(
-        pdfBlob,
-        (progress) => setOcrProgress(progress),
-        abortController.signal
-      );
-
-      setOcrProgress({
-        currentPage: ocrResult.totalPages,
-        totalPages: ocrResult.totalPages,
-        stage: 'completed',
-        percent: 95,
-        statusMessage: '추출된 텍스트 단락 청킹 및 pgvector 임베딩 저장 중...',
-      });
-
-      // 4. 추출된 페이지 텍스트를 서버로 전달하여 청킹/임베딩 저장
-      const ingestRes = await fetch(`/api/documents/${doc.id}/ocr-ingest`, {
+      const res = await fetch(`/api/documents/${doc.id}/replicate-ocr`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pages: ocrResult.pages }),
       });
 
-      const ingestData = await ingestRes.json();
-      if (!ingestRes.ok) {
-        throw new Error(ingestData.error || 'OCR 텍스트 저장 및 인덱싱 실패');
+      clearInterval(timer);
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Replicate OCR 처리 실패');
       }
 
       setOcrProgress({
-        currentPage: ocrResult.totalPages,
-        totalPages: ocrResult.totalPages,
         stage: 'completed',
         percent: 100,
-        statusMessage: `인덱싱 완료! 총 ${ingestData.chunksCount}개 청크가 성공적으로 생성되었습니다.`,
+        statusMessage: `인덱싱 완료! 총 ${data.chunksCount}개 청크가 성공적으로 생성되었습니다.`,
+        previewText: data.markdownPreview,
+        chunksCount: data.chunksCount,
       });
 
       setActionNotice({
         type: 'success',
-        message: `OCR 텍스트 추출 및 재청킹이 완료되었습니다! (총 ${ingestData.chunksCount}개 청크 생성됨)`,
+        message: `Replicate AI OCR이 완료되었습니다! (총 ${data.chunksCount}개 청크로 복원됨)`,
       });
 
       setTimeout(() => {
@@ -172,23 +140,16 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
         router.refresh();
       }, 1500);
     } catch (err: unknown) {
-      if (abortController.signal.aborted) {
-        setActionNotice({ type: 'error', message: 'OCR 작업이 취소되었습니다.' });
-      } else {
-        const msg = err instanceof Error ? err.message : 'OCR 처리 중 오류가 발생했습니다.';
-        setActionNotice({ type: 'error', message: msg });
-      }
+      clearInterval(timer);
+      const msg = err instanceof Error ? err.message : 'OCR 처리 중 오류가 발생했습니다.';
+      setActionNotice({ type: 'error', message: msg });
       setIsOcrModalOpen(false);
     } finally {
       setIsOcrRunning(false);
-      abortControllerRef.current = null;
     }
   };
 
   const handleCancelOcr = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
     setIsOcrModalOpen(false);
     setIsOcrRunning(false);
   };
@@ -252,8 +213,8 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
             disabled={isOcrRunning}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-semibold border border-violet-200 transition-colors disabled:opacity-50"
           >
-            <ScanLine className="w-3.5 h-3.5 text-violet-600" />
-            OCR 텍스트 추출
+            <Cpu className="w-3.5 h-3.5 text-violet-600" />
+            Replicate AI OCR
           </button>
 
           <button
@@ -292,10 +253,10 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
             <div>
               <div className="font-bold text-xs flex items-center gap-2">
                 <span>스캔 이미지 또는 폰트 윤곽선(아웃라인) 문서 감지</span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-200/60 font-semibold">OCR 권장</span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-200/60 font-semibold">AI OCR 권장</span>
               </div>
               <div className="text-xs text-amber-800/90 mt-0.5">
-                현재 추출된 텍스트 청크가 매우 적습니다 (총 {chunks.length}개). 브라우저 내장 OCR 엔진으로 본문 한글/영문을 정밀 추출하여 수십 개의 고품질 청크로 복원할 수 있습니다.
+                현재 추출된 텍스트 청크가 매우 적습니다 (총 {chunks.length}개). Replicate 클라우드 AI(datalab-to/marker)로 다단 컬럼/표/수식 및 아웃라인 폰트를 정밀 복원하여 풍부한 청크로 변환해 보세요.
               </div>
             </div>
           </div>
@@ -304,8 +265,8 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
             disabled={isOcrRunning}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold shadow-xs transition-all shrink-0 hover:shadow-md cursor-pointer"
           >
-            <ScanLine className="w-4 h-4" />
-            ⚡ 브라우저 OCR 실행하기
+            <Cpu className="w-4 h-4" />
+            ⚡ Replicate AI OCR 실행하기
           </button>
         </div>
       )}

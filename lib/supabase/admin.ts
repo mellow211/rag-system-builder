@@ -4,11 +4,13 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-service-key';
 
 export const isSupabaseAdminConfigured = () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return (
-    !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder') &&
-    !!process.env.SUPABASE_SERVICE_ROLE_KEY &&
-    !process.env.SUPABASE_SERVICE_ROLE_KEY.includes('placeholder')
+    !!url &&
+    !url.includes('placeholder') &&
+    !!key &&
+    !key.includes('placeholder')
   );
 };
 
@@ -17,7 +19,9 @@ export const getSupabaseAdmin = () => {
   if (typeof window !== 'undefined') {
     throw new Error('보안 경고: supabaseAdmin은 서버 환경에서만 호출되어야 합니다.');
   }
-  return createClient(supabaseUrl, supabaseServiceKey, {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-service-key';
+  return createClient(url, key, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,

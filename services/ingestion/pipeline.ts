@@ -398,7 +398,6 @@ export class IngestionPipeline {
           chunk_index: c.chunk_index,
           content: c.content, // 사용자 화면/인용용 순수 원문
           token_count: c.token_count,
-          section_title: c.section_title,
           metadata: {
             ...c.metadata,
             context_text: c.context_text,

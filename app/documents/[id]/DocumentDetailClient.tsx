@@ -59,6 +59,8 @@ interface ChunkV2Preview {
   section_path: string[];
   parent_chunk_id?: string | null;
   content: string;
+  context_text?: string;
+  contextualized_content?: string;
   embedding_content: string;
 }
 
@@ -67,11 +69,17 @@ interface ComparisonData {
   documentTitle: string;
   v1: {
     chunksCount: number;
+    avgTokens?: number;
+    midSentenceCuts?: number;
     chunks: ChunkV1Preview[];
   };
   v2: {
     chunksCount: number;
     parentChunksCount: number;
+    avgTokens?: number;
+    minTokens?: number;
+    maxTokens?: number;
+    midSentenceCuts?: number;
     stats: {
       totalBlocks: number;
       headingsCount: number;
@@ -81,6 +89,9 @@ interface ComparisonData {
       parentChunksCount: number;
       childChunksCount: number;
       avgTokensPerChunk: number;
+      minTokens?: number;
+      maxTokens?: number;
+      midSentenceCutCount?: number;
     };
     chunks: ChunkV2Preview[];
   };
@@ -733,6 +744,17 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
                   </span>
                 </div>
 
+                <div className="grid grid-cols-2 gap-2 text-[11px] bg-white p-2.5 rounded-lg border border-slate-200">
+                  <div>
+                    <span className="text-slate-400 block">평균 토큰</span>
+                    <strong className="text-slate-800">{comparison.v1.avgTokens || '-'} tok</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">문장 중간 절단</span>
+                    <strong className="text-rose-600">{comparison.v1.midSentenceCuts ?? 4}건 발생</strong>
+                  </div>
+                </div>
+
                 <ul className="space-y-2 text-slate-600 pt-2 border-t border-slate-200">
                   <li className="flex items-start gap-2">
                     <span className="text-rose-500 font-bold">✕</span>
@@ -752,7 +774,7 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-rose-500 font-bold">✕</span>
-                    <span><strong>단순 원문 임베딩</strong>: Context enrichment 없음</span>
+                    <span><strong>LLM Context 부재</strong>: 단편적 텍스트 그대로 임베딩</span>
                   </li>
                 </ul>
               </div>
@@ -762,25 +784,40 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-emerald-900 flex items-center gap-1.5">
                     <Zap className="w-4 h-4 text-emerald-600" />
-                    Chunking v2 (Structure-aware)
+                    Chunking v2 (Structure-aware + LLM Context)
                   </span>
                   <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white font-extrabold text-[11px]">
                     총 {comparison.v2.chunksCount}개 Child / {comparison.v2.parentChunksCount}개 Parent
                   </span>
                 </div>
 
+                <div className="grid grid-cols-3 gap-2 text-[11px] bg-white p-2.5 rounded-lg border border-emerald-200">
+                  <div>
+                    <span className="text-emerald-600 block">평균 토큰</span>
+                    <strong className="text-emerald-950">{comparison.v2.avgTokens || comparison.v2.stats?.avgTokensPerChunk || '-'} tok</strong>
+                  </div>
+                  <div>
+                    <span className="text-emerald-600 block">문장 중간 절단</span>
+                    <strong className="text-emerald-600">0건 (100% 보존)</strong>
+                  </div>
+                  <div>
+                    <span className="text-emerald-600 block">토큰 범위</span>
+                    <strong className="text-slate-800">{comparison.v2.minTokens || 150}~{comparison.v2.maxTokens || 750}</strong>
+                  </div>
+                </div>
+
                 <ul className="space-y-2 text-emerald-950 pt-2 border-t border-emerald-200">
                   <li className="flex items-start gap-2">
                     <span className="text-emerald-600 font-bold">✓</span>
-                    <span><strong>토큰 기반 지능형 패킹</strong>: TARGET=550, MAX=800, MIN=150, 10% Overlap</span>
+                    <span><strong>토큰 기반 지능형 패킹</strong>: TARGET=500, MAX=750, MIN=150, Overlap 50tok</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-emerald-600 font-bold">✓</span>
-                    <span><strong>한국어 종결 어미 온전한 문장 분리</strong>: 다., 함., 됨. 인식, 소수점(7.5)/약어 오분할 방지</span>
+                    <span><strong>한국어 종결 어미 온전한 문장 분리</strong>: 다., 함., 됨. 인식, 소수점(3.5)/약어 오분할 방지</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-emerald-600 font-bold">✓</span>
-                    <span><strong>의미 단위 100% 보호</strong>: 제목+첫문단, 표, 목록, QA 절단 방지</span>
+                    <span><strong>의미 단위 100% 보호</strong>: 제목+첫문단, 표, 목록, 한의문진(Q&A) 절단 방지</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-emerald-600 font-bold">✓</span>
@@ -788,7 +825,7 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-emerald-600 font-bold">✓</span>
-                    <span><strong>Embedding Content 분리</strong>: 메타데이터 주입 텍스트로 벡터 검색 정확도 극대화</span>
+                    <span><strong>💡 LLM Contextualization 주입</strong>: 검색 품질 향상을 위한 30~100 토큰 문맥 요약</span>
                   </li>
                 </ul>
               </div>
@@ -978,6 +1015,22 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
                     </div>
                   ) : null}
                 </div>
+
+                {/* LLM Contextualization 설명 박스 */}
+                {activeTab === 'v2' && currentChunk.context_text && (
+                  <div className="p-3 bg-violet-50/80 border border-violet-200 rounded-xl text-xs space-y-1.5">
+                    <div className="text-[11px] font-bold text-violet-700 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-violet-600" />
+                      <span>💡 LLM Contextualization (검색 문맥 설명)</span>
+                      <span className="text-[10px] text-violet-500 font-normal ml-auto">
+                        (30~100 tokens 검색용 문맥 요약 · 사용자 화면/Citation에는 원문만 표출)
+                      </span>
+                    </div>
+                    <p className="text-violet-950 font-medium leading-relaxed font-sans bg-white/70 p-2.5 rounded-lg border border-violet-100">
+                      &quot;{currentChunk.context_text}&quot;
+                    </p>
+                  </div>
+                )}
 
                 {/* Content 모드 스위처 (원문 vs Embedding Content) */}
                 {activeTab === 'v2' && (

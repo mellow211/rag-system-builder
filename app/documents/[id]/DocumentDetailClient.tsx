@@ -32,8 +32,16 @@ import {
   Zap,
   Copy,
   Check,
+  Network,
+  GitBranch,
+  AlignLeft,
 } from 'lucide-react';
 import { OcrProcessingModal, OcrModalProgress } from '@/components/documents/OcrProcessingModal';
+import { DocumentProfileTab } from '@/components/documents/tabs/DocumentProfileTab';
+import { DocumentRawTextTab } from '@/components/documents/tabs/DocumentRawTextTab';
+import { DocumentVersionTab } from '@/components/documents/tabs/DocumentVersionTab';
+import { ChunkAgentTab } from '@/components/documents/tabs/ChunkAgentTab';
+import { DocumentGraphTab } from '@/components/documents/tabs/DocumentGraphTab';
 
 interface DocumentDetailClientProps {
   document: RagDocument;
@@ -116,6 +124,18 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
 
   // 뷰 모드 탭 ('v2' | 'v1' | 'compare')
   const [activeTab, setActiveTab] = useState<'v2' | 'v1' | 'compare'>('v2');
+
+  // 3계층 통합 Workspace 탭 ('profile' | 'chunk-agent' | 'rag-index' | 'graph' | 'raw' | 'version')
+  const [workspaceTab, setWorkspaceTab] = useState<'profile' | 'chunk-agent' | 'rag-index' | 'graph' | 'raw' | 'version'>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab') as any;
+      if (['profile', 'chunk-agent', 'rag-index', 'graph', 'raw', 'version'].includes(tabParam)) {
+        return tabParam;
+      }
+    }
+    return initialDoc.status === 'INDEXED' ? 'rag-index' : 'profile';
+  });
 
   // 3-Chunk Navigator 선택 인덱스
   const [selectedChunkIdx, setSelectedChunkIdx] = useState<number>(0);
@@ -619,7 +639,123 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
         </div>
       </div>
 
-      {/* 4. Chunking 파이프라인 비교 제어 탭 */}
+      {/* 4. 지식 자산 3계층 통합 Workspace 네비게이션 탭 */}
+      <div className="flex items-center gap-1.5 p-1.5 bg-slate-100/90 rounded-2xl border border-slate-200 overflow-x-auto">
+        <button
+          onClick={() => setWorkspaceTab('profile')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            workspaceTab === 'profile'
+              ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-indigo-500/20'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-indigo-600" />
+          <span>1. 문서 분석 (Document Profile)</span>
+          {doc.status === 'PROFILE_REVIEW' && (
+            <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+          )}
+        </button>
+
+        <button
+          onClick={() => setWorkspaceTab('chunk-agent')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            workspaceTab === 'chunk-agent'
+              ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-500/20'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Layers className="w-4 h-4 text-blue-600" />
+          <span>2. Chunk 설계 (Agent)</span>
+          {doc.status === 'CHUNKING' && (
+            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+          )}
+        </button>
+
+        <button
+          onClick={() => setWorkspaceTab('rag-index')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            workspaceTab === 'rag-index'
+              ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-emerald-500/20'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Zap className="w-4 h-4 text-emerald-600" />
+          <span>3. RAG Index ({dbChunks.length}개)</span>
+        </button>
+
+        <button
+          onClick={() => setWorkspaceTab('graph')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            workspaceTab === 'graph'
+              ? 'bg-white text-violet-700 shadow-sm ring-1 ring-violet-500/20'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Network className="w-4 h-4 text-violet-600" />
+          <span>4. Knowledge Graph</span>
+        </button>
+
+        <button
+          onClick={() => setWorkspaceTab('raw')}
+          className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            workspaceTab === 'raw'
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <AlignLeft className="w-4 h-4 text-slate-500" />
+          <span>원문</span>
+        </button>
+
+        <button
+          onClick={() => setWorkspaceTab('version')}
+          className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            workspaceTab === 'version'
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <GitBranch className="w-4 h-4 text-slate-500" />
+          <span>버전</span>
+        </button>
+      </div>
+
+      {/* 5. 탭별 메인 컨텐츠 렌더링 */}
+      {workspaceTab === 'profile' && (
+        <DocumentProfileTab
+          documentId={doc.id}
+          domain={domain}
+          onProfileApproved={() => {
+            setDoc((prev) => ({ ...prev, status: 'CHUNKING' }));
+            setWorkspaceTab('chunk-agent');
+          }}
+        />
+      )}
+
+      {workspaceTab === 'chunk-agent' && (
+        <ChunkAgentTab
+          documentId={doc.id}
+          onApplySuccess={() => {
+            setDoc((prev) => ({ ...prev, status: 'INDEXED' }));
+            setWorkspaceTab('rag-index');
+          }}
+        />
+      )}
+
+      {workspaceTab === 'graph' && (
+        <DocumentGraphTab documentId={doc.id} domain={domain} />
+      )}
+
+      {workspaceTab === 'raw' && (
+        <DocumentRawTextTab documentId={doc.id} />
+      )}
+
+      {workspaceTab === 'version' && (
+        <DocumentVersionTab document={doc} dbChunksCount={dbChunks.length} />
+      )}
+
+      {/* 6. RAG Index 및 청킹 파이프라인 비교 제어 탭 */}
+      {workspaceTab === 'rag-index' && (
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
           <div className="flex items-center gap-1.5 p-1 bg-slate-100/90 rounded-xl">
@@ -1233,6 +1369,7 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* 삭제 확인 모달 */}
       <DeleteConfirmModal

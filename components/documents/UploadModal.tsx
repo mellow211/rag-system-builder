@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { DomainType, DocumentType, DOMAIN_CONFIGS } from '@/types/rag';
 import { formatBytes } from '@/lib/utils';
 import { X, Upload, FileText, CheckCircle2, AlertCircle, Loader2, ScanLine, Sparkles, Cpu } from 'lucide-react';
@@ -19,6 +20,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   onClose,
   onSuccess,
 }) => {
+  const router = useRouter();
   const [domain, setDomain] = useState<DomainType>(currentDomain);
   const [title, setTitle] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -147,29 +149,21 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         }
       }
 
-      // 3단계: 텍스트 추출, 청킹 및 임베딩 인덱싱 실행
-      setStatusStep('텍스트 추출, 청킹 및 pgvector 인덱싱 중...');
-      const processRes = await fetch(`/api/documents/${documentId}/process`, {
-        method: 'POST',
-      });
-
-      const processText = await processRes.text();
-      let processData: any;
+      // 3단계: AI 문서 인텔리전스 (Document Profile) 분석 수행
+      setStatusStep('AI 문서 인텔리전스 (Document Profile) 분석 중...');
       try {
-        processData = JSON.parse(processText);
-      } catch {
-        throw new Error(`인덱싱 응답 오류 (${processRes.status})`);
-      }
-
-      if (!processRes.ok) {
-        if (processData?.error?.includes('스캔 이미지') || processData?.error?.includes('윤곽선')) {
-          setScannedDocId(documentId);
-        }
-        throw new Error(processData.error || '문서 인덱싱 처리에 실패했습니다.');
+        await fetch(`/api/documents/${documentId}/profile/analyze`, {
+          method: 'POST',
+        });
+      } catch (profileErr) {
+        console.warn('Profile 분석 백그라운드 재시도 필요:', profileErr);
       }
 
       onSuccess();
       onClose();
+
+      // 문서 분석(Document Profile) 화면으로 안내
+      router.push(`/documents/${documentId}?tab=profile`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '업로드 중 오류가 발생했습니다.';
       setErrorMessage(msg);

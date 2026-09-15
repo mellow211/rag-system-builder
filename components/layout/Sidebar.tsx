@@ -14,7 +14,8 @@ import {
   SunMoon,
   Stethoscope,
   ChevronRight,
-  BarChart3
+  BarChart3,
+  Network
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { DOMAIN_CONFIGS, DomainType } from '@/types/rag';
@@ -110,6 +111,28 @@ export const Sidebar: React.FC = () => {
                 </Link>
               );
             })}
+          </div>
+        </div>
+
+        {/* 지식 패브릭 섹션 */}
+        <div>
+          <div className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <Network className="w-3.5 h-3.5" />
+            <span>지식 패브릭 (Knowledge Fabric)</span>
+          </div>
+          <div className="space-y-1">
+            <Link
+              href="/fabric"
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                pathname.startsWith('/fabric')
+                  ? 'bg-indigo-50 text-indigo-800 font-semibold border border-indigo-200'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              )}
+            >
+              <Network className="w-4 h-4 text-indigo-600" />
+              <span>지식 그래프 탐색기</span>
+            </Link>
           </div>
         </div>
 

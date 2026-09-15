@@ -1,8 +1,139 @@
 export type DomainType = 'health' | 'yangsaeng' | 'circadian' | 'korean-medicine';
 
-export type DocumentStatus = 'UPLOADED' | 'PROCESSING' | 'INDEXED' | 'ERROR' | 'ARCHIVED';
+export type DocumentStatus =
+  | 'UPLOADED'
+  | 'EXTRACTING'
+  | 'ANALYZING'
+  | 'PROFILE_REVIEW'
+  | 'CHUNKING'
+  | 'CHUNK_REVIEW'
+  | 'EMBEDDING'
+  | 'GRAPH_BUILDING'
+  | 'GRAPH_REVIEW'
+  | 'READY'
+  | 'ERROR'
+  | 'INDEXED'
+  | 'PROCESSING'
+  | 'ARCHIVED';
 
 export type DocumentType = '논문' | '가이드라인' | '공공기관 자료' | '내부 문서' | '기타';
+
+export interface DocumentProfileSection {
+  title: string;
+  level: number;
+  page?: number;
+  subsections?: string[];
+}
+
+export interface CandidateEntity {
+  name: string;
+  type: string;
+  description?: string;
+  confidence?: number;
+}
+
+export interface CrossDomainConnection {
+  domain: DomainType;
+  concept: string;
+  rationale: string;
+}
+
+export interface DocumentProfile {
+  id?: string;
+  document_id: string;
+  domain: DomainType;
+  document_type: string;
+  summary_short: string;
+  summary_full: string;
+  topics: string[];
+  concepts: string[];
+  keywords: string[];
+  target_population: string[];
+  diseases: string[];
+  health_metrics: string[];
+  lifestyle_factors: string[];
+  categories: string[];
+  structure: DocumentProfileSection[];
+  candidate_entities?: CandidateEntity[];
+  cross_domain_connections?: CrossDomainConnection[];
+  llm_model?: string;
+  prompt_version: string;
+  profile_version: string;
+  status: 'PROPOSED' | 'EDITED' | 'APPROVED';
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ChunkProposal {
+  id: string;
+  session_id: string;
+  document_id: string;
+  proposed_index: number;
+  section_path: string[];
+  title: string;
+  proposed_content: string;
+  token_count: number;
+  chunk_type: string;
+  category?: string;
+  page_start?: number;
+  page_end?: number;
+  parent_id?: string | null;
+  status: 'PROPOSED' | 'EDITED' | 'APPROVED' | 'REJECTED';
+  created_at?: string;
+}
+
+export interface ChunkingSession {
+  id: string;
+  document_id: string;
+  status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+  strategy: string;
+  chat_history: Array<{ role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string }>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeNode {
+  id: string;
+  canonical_name: string;
+  node_type: string;
+  domain: DomainType;
+  description?: string;
+  aliases: string[];
+  metadata?: Record<string, unknown>;
+  status: 'PROPOSED' | 'APPROVED';
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface KnowledgeEdge {
+  id: string;
+  source_node_id: string;
+  target_node_id: string;
+  relation_type: string;
+  document_id?: string;
+  chunk_id?: string;
+  confidence: number;
+  evidence_text?: string;
+  page?: number;
+  status: 'PROPOSED' | 'APPROVED' | 'REJECTED';
+  metadata?: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+  source_node?: KnowledgeNode;
+  target_node?: KnowledgeNode;
+}
+
+export interface CategoryItem {
+  id: string;
+  name: string;
+  parent_id?: string | null;
+  domain: DomainType;
+  description?: string;
+  status: 'PROPOSED' | 'APPROVED' | 'MERGED';
+  created_at?: string;
+  updated_at?: string;
+  children?: CategoryItem[];
+}
 
 export interface DomainConfig {
   domain: DomainType;
@@ -103,6 +234,8 @@ export interface RagDocument {
     [key: string]: unknown;
   };
   error_message: string | null;
+  profile_version?: string;
+  graph_version?: string;
   created_at: string;
   updated_at: string;
   chunks_count?: number;

@@ -77,12 +77,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         context_text: p.context_text,
         embedding_content: p.embedding_content,
         chunking_version: 'v2',
+        ingestion_version: 'v2',
         source: doc?.source,
         publisher: doc?.publisher,
       },
       embedding: embeddings[idx],
-      section_title: p.title,
-      ingestion_version: 'v2',
     }));
 
     // 4. DB 저장

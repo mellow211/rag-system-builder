@@ -29,6 +29,11 @@ export class MockLLMProvider implements LLMProvider {
       } as unknown as T;
     }
 
+    // ChunkAgentDecision 요청인지 감지
+    if (req.schemaName === 'ChunkAgentDecision') {
+      return this.createMockChunkAgentDecision(text) as unknown as T;
+    }
+
     // 기본 빈 JSON 구조 (스키마 기준 기본값 조합)
     const fallback: Record<string, unknown> = {};
     if (req.schema.properties) {
@@ -250,6 +255,48 @@ export class MockLLMProvider implements LLMProvider {
           confidence: 0.89,
         },
       ],
+    };
+  }
+
+  private createMockChunkAgentDecision(prompt: string) {
+    const userMatch = prompt.match(/\[사용자 최신 요청\]:\s*["']?([^"'\n]+)/i);
+    const target = (userMatch ? userMatch[1] : prompt).toLowerCase();
+
+    if (target.includes('승인') || target.includes('확정') || target.includes('적용') || target.includes('좋아') || target.includes('approve')) {
+      return {
+        thought: '사용자가 청크 계획 승인을 요청함',
+        action: 'approve_all',
+        reply_message: '모든 청크 구조가 최종 승인되었습니다! 상단의 [승인 적용 및 RAG Index 생성] 버튼을 누르면 인덱싱이 완료됩니다.',
+      };
+    }
+    if (target.includes('합쳐') || target.includes('묶어') || target.includes('merge')) {
+      return {
+        thought: '사용자가 청크 병합을 요청함',
+        action: 'merge',
+        action_params: { chunk_indices: [1, 2], new_title: '병합된 통합 청크' },
+        reply_message: '요청하신 청크들을 하나로 병합하였습니다.',
+      };
+    }
+    if (target.includes('나눠') || target.includes('분할') || target.includes('split')) {
+      return {
+        thought: '사용자가 청크 분할을 요청함',
+        action: 'split',
+        action_params: { chunk_index: 1, sub_titles: ['전반부 세부 내용', '후반부 세부 내용'] },
+        reply_message: '선택하신 청크를 2개의 세부 청크로 분할하였습니다.',
+      };
+    }
+    if (target.includes('제목') || target.includes('이름') || target.includes('rename')) {
+      return {
+        thought: '사용자가 청크 제목 변경을 요청함',
+        action: 'rename',
+        action_params: { chunk_index: 1, new_title: '전문가 검토 핵심 청크' },
+        reply_message: '청크 제목을 전문가 검토 명칭으로 변경하였습니다.',
+      };
+    }
+    return {
+      thought: '일반 문의 또는 청킹 조언 요청',
+      action: 'none',
+      reply_message: '문서의 주요 맥락과 의미 단락에 맞추어 청크를 분석 중입니다. 특정 청크의 분할이나 병합, 제목 변경을 요청하시면 즉시 반영하겠습니다.',
     };
   }
 }

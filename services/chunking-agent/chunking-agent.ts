@@ -6,6 +6,12 @@ import { ParentChildChunker } from '../ingestion/chunking/parent-child-chunker';
 import { cleanDocument } from '../ingestion/cleaning/clean-document';
 import { getParserForFile } from '@/lib/parsers';
 import { TokenCounter } from '@/lib/chunking/token-counter';
+import { getLLMProvider } from '@/services/llm';
+import {
+  CHUNK_AGENT_SYSTEM_PROMPT,
+  CHUNK_AGENT_DECISION_SCHEMA,
+  ChunkAgentActionDecision,
+} from './prompts/chunk-agent';
 
 export class ChunkingAgent {
   private static inMemorySessions = new Map<string, ChunkingSession>();
@@ -48,20 +54,20 @@ export class ChunkingAgent {
 
     // 2. 신규 세션 및 초기 Proposal 생성
     let doc: any = null;
-    let fullText = '';
     let parsedPages: Array<{ pageNumber: number; text: string }> = [];
 
     if (supabase) {
       const { data: docData } = await supabase.from('documents').select('*').eq('id', documentId).single();
       doc = docData;
 
+      // 파일 원본 스토리지에서 다운로드 및 파싱
       if (doc?.storage_path) {
         try {
           const { data: fileData } = await supabase.storage.from('documents').download(doc.storage_path);
           if (fileData) {
             const buffer = Buffer.from(await fileData.arrayBuffer());
-            const parser = getParserForFile(doc.filename);
-            const parsed = await parser.parse(buffer, doc.filename);
+            const parser = getParserForFile(doc.filename || 'document.pdf');
+            const parsed = await parser.parse(buffer, doc.filename || 'document.pdf');
             parsedPages = (parsed.pages || []).map((p, idx) => ({
               pageNumber: p.pageNumber ?? idx + 1,
               text: p.text,
@@ -89,6 +95,17 @@ export class ChunkingAgent {
       }
     }
 
+    // 문서 메타데이터 요약이나 텍스트 확인
+    if (parsedPages.length === 0 && (doc?.metadata?.raw_text || doc?.metadata?.summary_full)) {
+      parsedPages = [
+        {
+          pageNumber: 1,
+          text: doc.metadata?.raw_text || doc.metadata?.summary_full,
+        },
+      ];
+    }
+
+    // 최후의 기본 샘플 텍스트 (테스트 환경)
     if (parsedPages.length === 0) {
       parsedPages = [
         {
@@ -128,39 +145,39 @@ export class ChunkingAgent {
       id: `prop-${documentId}-${c.chunk_index}`,
       session_id: sessionId,
       document_id: documentId,
-      proposed_index: c.chunk_index + 1,
-      section_path: c.section_path.length > 0 ? c.section_path : [c.section_title || '일반 섹션'],
-      title: c.section_title || `청크 #${c.chunk_index + 1}`,
+      proposed_index: c.chunk_index,
+      title: c.section_title || `${doc?.title || '청크'} #${c.chunk_index}`,
+      section_path: c.section_path || [],
+      chunk_type: c.chunk_type || 'paragraph',
+      category: (doc?.metadata?.domain as string) || '일반',
       proposed_content: c.content,
-      token_count: c.token_count,
-      chunk_type: c.chunk_type,
-      category: `${doc?.metadata?.domain || '건강'} > ${c.section_title || '일반'}`,
-      page_start: c.page_start,
-      page_end: c.page_end,
-      parent_id: c.parent_chunk_id,
+      token_count: c.token_count || TokenCounter.count(c.content),
+      page_start: c.page_start || 1,
+      page_end: c.page_end || 1,
       status: 'PROPOSED',
+      context_text: c.context_text,
+      embedding_content: c.embedding_content || c.content,
       created_at: new Date().toISOString(),
     }));
 
+    // 프로포절 저장
     await ChunkAgentTools.saveProposals(documentId, initialProposals);
 
-    // 안내 웰컴 메시지 작성
-    const initialMessage: ChunkingAgentMessage = {
-      role: 'assistant',
-      content: `안녕하세요! 저는 Chunk 설계를 돕는 전문 AI 에이전트입니다.
-이 문서는 총 **${chunkingRes.parentChunks.length}개 주요 섹션**으로 파악되었습니다.
-
-검색 효율과 의미적 완결성을 고려하여 총 **${initialProposals.length}개의 청크** 생성을 제안합니다.
-좌측 문서 구조 트리를 확인하시고, 특정 영역을 더 잘게 나누거나("빛 노출 분할해줘") 두 청크를 묶고 싶으시면("A와 B 합쳐줘") 편하게 말씀해 주세요.`,
-      timestamp: new Date().toISOString(),
-    };
-
+    // 신규 세션 객체 생성
     const newSession: ChunkingSession = {
       id: sessionId,
       document_id: documentId,
       status: 'ACTIVE',
-      strategy: 'structure_aware_agent',
-      chat_history: [initialMessage],
+      strategy: 'agent_assisted',
+      total_proposals: initialProposals.length,
+      approved_proposals: 0,
+      chat_history: [
+        {
+          role: 'assistant',
+          content: `반갑습니다! "${doc?.title || '문서'}"의 구조 분석을 완료하여 총 **${initialProposals.length}개의 초기 청크 제안**을 구성했습니다.\n\n각 청크의 분할·병합, 제목 수정, 카테고리 조정 등 필요한 작업이 있으시면 자연어로 편하게 말씀해 주세요.`,
+          timestamp: new Date().toISOString(),
+        },
+      ],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -170,11 +187,14 @@ export class ChunkingAgent {
     if (supabase) {
       try {
         await supabase.from('chunking_sessions').insert({
-          id: sessionId,
-          document_id: documentId,
-          status: 'ACTIVE',
-          strategy: 'structure_aware_agent',
-          chat_history: [initialMessage],
+          id: newSession.id,
+          document_id: newSession.document_id,
+          status: newSession.status,
+          total_proposals: newSession.total_proposals,
+          approved_proposals: newSession.approved_proposals,
+          chat_history: newSession.chat_history,
+          created_at: newSession.created_at,
+          updated_at: newSession.updated_at,
         });
       } catch (e) {
         console.warn('[ChunkingAgent] 세션 저장 폴백:', e);
@@ -185,7 +205,7 @@ export class ChunkingAgent {
   }
 
   /**
-   * 사용자의 자연어 지시를 분석하여 적절한 Chunking Tool을 실행하고 대화합니다.
+   * LLM을 적극 활용하여 사용자의 자연어 지시를 정밀 분석하고, 적절한 Chunking Tool을 실행합니다.
    */
   public static async chat(
     documentId: string,
@@ -205,67 +225,129 @@ export class ChunkingAgent {
     };
     session.chat_history.push(userEntry);
 
-    const lower = userMessage.toLowerCase().trim();
-    let replyText = '';
     let updatedProposals = [...proposals];
+    const provider = getLLMProvider();
 
-    // 의도 분석 및 도구 자동 라우팅
-    if (lower.includes('합쳐') || lower.includes('묶어') || lower.includes('merge')) {
-      // 병합 도구 호출 시도
-      if (updatedProposals.length >= 2) {
-        const target1 = updatedProposals[0];
-        const target2 = updatedProposals[1];
-        updatedProposals = await ChunkAgentTools.mergeChunks(
-          documentId,
-          [target1.id, target2.id],
-          `${target1.title} & ${target2.title}`
-        );
-        replyText = `청크 #${target1.proposed_index}("${target1.title}")와 #${target2.proposed_index}("${target2.title}")를 하나로 성공적으로 병합하였습니다.\n현재 총 청크 수는 **${updatedProposals.length}개**입니다.`;
-      } else {
-        replyText = '병합할 청크가 충분하지 않습니다.';
-      }
-    } else if (lower.includes('나눠') || lower.includes('분할') || lower.includes('split')) {
-      // 분할 도구 호출 시도 (토큰 수가 가장 큰 청크 대상)
-      const largest = [...updatedProposals].sort((a, b) => (b.token_count || 0) - (a.token_count || 0))[0];
-      if (largest) {
-        updatedProposals = await ChunkAgentTools.splitSection(documentId, largest.id, [
-          `${largest.title} (전반부)`,
-          `${largest.title} (후반부)`,
-        ]);
-        replyText = `가장 토큰 수가 많았던 "${largest.title}" 청크를 2개의 세부 청크로 분할하였습니다.\n현재 총 청크 수는 **${updatedProposals.length}개**입니다.`;
-      }
-    } else if (lower.includes('제목') || lower.includes('이름') || lower.includes('rename')) {
-      if (updatedProposals.length > 0) {
-        const first = updatedProposals[0];
-        await ChunkAgentTools.renameChunk(documentId, first.id, `${first.title} (전문가 검토본)`);
-        updatedProposals = await ChunkAgentTools.getProposals(documentId);
-        replyText = `청크 #${first.proposed_index}의 제목을 변경하였습니다.`;
-      }
-    } else if (lower.includes('승인') || lower.includes('확정') || lower.includes('적용') || lower.includes('좋아')) {
-      // 모든 청크 상태를 APPROVED로 승격
-      updatedProposals.forEach((p) => {
-        p.status = 'APPROVED';
+    // 청크 현황 요약 준비 (LLM 컨텍스트 주입용)
+    const proposalsOverview = updatedProposals.slice(0, 15).map((p) => ({
+      index: p.proposed_index,
+      title: p.title,
+      category: p.category,
+      tokens: p.token_count,
+      page: p.page_start,
+      preview: p.proposed_content.slice(0, 80) + '...',
+    }));
+
+    const prompt = `[문서 ID]: ${documentId}
+[현재 청크 계획 현황 (총 ${updatedProposals.length}개)]:
+${JSON.stringify(proposalsOverview, null, 2)}
+
+[최근 대화 이력]:
+${session.chat_history.slice(-4).map((m) => `${m.role}: ${m.content}`).join('\n')}
+
+[사용자 최신 요청]:
+"${userMessage}"
+
+위 사용자의 자연어 요청을 깊이 분석하여, 가장 적절한 action과 action_params, 그리고 사용자에게 전달할 한국어 reply_message를 JSON으로 응답하라.`;
+
+    let decision: ChunkAgentActionDecision;
+    try {
+      decision = await provider.generateStructured<ChunkAgentActionDecision>({
+        systemPrompt: CHUNK_AGENT_SYSTEM_PROMPT,
+        prompt,
+        schemaName: 'ChunkAgentDecision',
+        schema: CHUNK_AGENT_DECISION_SCHEMA,
+        temperature: 0.1,
+        maxTokens: 1200,
       });
-      await ChunkAgentTools.saveProposals(documentId, updatedProposals);
-      replyText = `총 **${updatedProposals.length}개의 청크 구조가 최종 승인**되었습니다! 상단의 [승인 적용 및 RAG Index 생성] 버튼을 누르면 pgvector 임베딩 및 인덱싱이 시작됩니다.`;
-    } else {
-      // 일반 대화 및 가이드 응답
-      const stats = await ChunkAgentTools.previewChunkPlan(documentId);
-      replyText = `현재 청크 플랜 현황입니다:
-- 총 청크 수: **${stats.totalProposals}개**
-- 평균 토큰: **${stats.avgTokens} tokens**
-- 섹션 수: **${stats.sectionsCount}개**
+    } catch (llmErr) {
+      console.warn('[ChunkingAgent] LLM 판단 폴백:', llmErr);
+      decision = this.heuristicDecision(userMessage, updatedProposals);
+    }
 
-"1번과 2번 청크 합쳐줘", "가장 긴 청크 분할해줘", "이대로 승인해줘"와 같이 말씀해 주시면 즉시 반영하겠습니다.`;
+    // 도구(Action) 실행
+    try {
+      if (decision.action === 'merge') {
+        const targetIndices = decision.action_params?.chunk_indices || [1, 2];
+        const targets = updatedProposals.filter((p) => targetIndices.includes(p.proposed_index));
+        if (targets.length >= 2) {
+          const newTitle =
+            decision.action_params?.new_title ||
+            `${targets[0].title} & ${targets[1].title}`;
+          updatedProposals = await ChunkAgentTools.mergeChunks(
+            documentId,
+            targets.map((t) => t.id),
+            newTitle
+          );
+        }
+      } else if (decision.action === 'split') {
+        const targetIndex = decision.action_params?.chunk_index;
+        let target = targetIndex
+          ? updatedProposals.find((p) => p.proposed_index === targetIndex)
+          : null;
+        if (!target) {
+          // 토큰 수가 가장 큰 청크 자동 선택
+          target = [...updatedProposals].sort(
+            (a, b) => (b.token_count || 0) - (a.token_count || 0)
+          )[0];
+        }
+        if (target) {
+          const subTitles = decision.action_params?.sub_titles || [
+            `${target.title} (전반부)`,
+            `${target.title} (후반부)`,
+          ];
+          updatedProposals = await ChunkAgentTools.splitSection(
+            documentId,
+            target.id,
+            subTitles
+          );
+        }
+      } else if (decision.action === 'rename') {
+        const targetIndex = decision.action_params?.chunk_index || 1;
+        const target =
+          updatedProposals.find((p) => p.proposed_index === targetIndex) ||
+          updatedProposals[0];
+        if (target && decision.action_params?.new_title) {
+          await ChunkAgentTools.renameChunk(
+            documentId,
+            target.id,
+            decision.action_params.new_title
+          );
+          updatedProposals = await ChunkAgentTools.getProposals(documentId);
+        }
+      } else if (decision.action === 'change_category') {
+        const targetIndex = decision.action_params?.chunk_index || 1;
+        const target =
+          updatedProposals.find((p) => p.proposed_index === targetIndex) ||
+          updatedProposals[0];
+        if (target && decision.action_params?.new_category) {
+          await ChunkAgentTools.changeChunkCategory(
+            documentId,
+            target.id,
+            decision.action_params.new_category
+          );
+          updatedProposals = await ChunkAgentTools.getProposals(documentId);
+        }
+      } else if (decision.action === 'approve_all') {
+        updatedProposals = updatedProposals.map((p) => ({
+          ...p,
+          status: 'APPROVED' as const,
+        }));
+        await ChunkAgentTools.saveProposals(documentId, updatedProposals);
+      }
+    } catch (actionErr) {
+      console.warn('[ChunkingAgent] 도구 실행 오류, 제안 상태 보존:', actionErr);
     }
 
     const assistantEntry: ChunkingAgentMessage = {
       role: 'assistant',
-      content: replyText,
+      content: decision.reply_message,
       timestamp: new Date().toISOString(),
     };
     session.chat_history.push(assistantEntry);
     session.updated_at = new Date().toISOString();
+    session.total_proposals = updatedProposals.length;
+    session.approved_proposals = updatedProposals.filter((p) => p.status === 'APPROVED').length;
 
     // DB 세션 히스토리 업데이트
     if (isSupabaseAdminConfigured()) {
@@ -275,6 +357,8 @@ export class ChunkingAgent {
           .from('chunking_sessions')
           .update({
             chat_history: session.chat_history,
+            total_proposals: session.total_proposals,
+            approved_proposals: session.approved_proposals,
             updated_at: new Date().toISOString(),
           })
           .eq('id', session.id);
@@ -287,6 +371,52 @@ export class ChunkingAgent {
       session,
       proposals: updatedProposals,
       assistantMessage: assistantEntry,
+    };
+  }
+
+  /**
+   * 오프라인/오류 시 휴리스틱 의도 분석 폴백
+   */
+  private static heuristicDecision(
+    userMessage: string,
+    proposals: ChunkProposal[]
+  ): ChunkAgentActionDecision {
+    const lower = userMessage.toLowerCase();
+    if (lower.includes('합쳐') || lower.includes('묶어') || lower.includes('merge')) {
+      return {
+        thought: '청크 병합 요청 감지',
+        action: 'merge',
+        action_params: { chunk_indices: [1, 2], new_title: '병합된 통합 청크' },
+        reply_message: '요청하신 청크들을 성공적으로 병합하였습니다.',
+      };
+    }
+    if (lower.includes('나눠') || lower.includes('분할') || lower.includes('split')) {
+      return {
+        thought: '청크 분할 요청 감지',
+        action: 'split',
+        action_params: { chunk_index: 1, sub_titles: ['전반부 세부 내용', '후반부 세부 내용'] },
+        reply_message: '해당 청크를 세부 하위 청크들로 분할하였습니다.',
+      };
+    }
+    if (lower.includes('제목') || lower.includes('이름') || lower.includes('rename')) {
+      return {
+        thought: '청크 제목 변경 요청 감지',
+        action: 'rename',
+        action_params: { chunk_index: 1, new_title: '전문가 검토 핵심 청크' },
+        reply_message: '청크의 대표 제목을 성공적으로 변경하였습니다.',
+      };
+    }
+    if (lower.includes('승인') || lower.includes('확정') || lower.includes('적용') || lower.includes('좋아')) {
+      return {
+        thought: '전체 승인 요청 감지',
+        action: 'approve_all',
+        reply_message: '총 모든 청크 계획이 최종 승인되었습니다! 상단의 [승인 적용 및 RAG Index 생성] 버튼을 클릭하시면 벡터 색인이 진행됩니다.',
+      };
+    }
+    return {
+      thought: '일반 문의 또는 상태 확인',
+      action: 'none',
+      reply_message: `현재 총 **${proposals.length}개의 청크**가 제안되어 있습니다. 특정 청크 번호의 분할이나 병합, 제목 변경을 지시해 주시면 즉시 반영하겠습니다.`,
     };
   }
 }

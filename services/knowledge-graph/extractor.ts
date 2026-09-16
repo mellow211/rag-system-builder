@@ -2,6 +2,8 @@ import { getSupabaseAdmin, isSupabaseAdminConfigured } from '@/lib/supabase/admi
 import { KnowledgeNode, KnowledgeEdge, DomainType } from '@/types/rag';
 import { EntityNormalizer } from './normalizer';
 import { getLLMProvider } from '@/services/llm';
+import { ChunkAgentTools } from '../chunking-agent/tools';
+import { getParserForFile } from '@/lib/parsers';
 import {
   GRAPH_EXTRACT_PROMPT_VERSION,
   GRAPH_EXTRACT_SYSTEM_PROMPT,
@@ -25,20 +27,88 @@ export class GraphExtractor {
     let chunks: any[] = [];
 
     if (supabase) {
-      const { data: docData } = await supabase.from('documents').select('*').eq('id', documentId).single();
-      doc = docData;
+      try {
+        const { data: docData } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', documentId)
+          .single();
+        doc = docData;
 
-      // 승인된 document_chunks 조회
-      const { data: chunkData } = await supabase
-        .from('document_chunks')
-        .select('*')
-        .eq('document_id', documentId)
-        .order('chunk_index');
+        // 1. 이미 인덱싱된 document_chunks 확인
+        const { data: chunkData } = await supabase
+          .from('document_chunks')
+          .select('*')
+          .eq('document_id', documentId)
+          .order('chunk_index');
 
-      chunks = chunkData || [];
+        if (chunkData && chunkData.length > 0) {
+          chunks = chunkData;
+        }
+      } catch (err) {
+        console.warn('[GraphExtractor] DB 문서 조회 경고:', err);
+      }
     }
 
-    // 청크가 없으면 메모리/프로포절에서 확보
+    // 2. document_chunks가 없다면, Chunk Proposals 확인
+    if (chunks.length === 0) {
+      try {
+        const proposals = await ChunkAgentTools.getProposals(documentId);
+        if (proposals && proposals.length > 0) {
+          chunks = proposals.map((p) => ({
+            id: p.id,
+            chunk_index: p.proposed_index,
+            content: p.proposed_content,
+            metadata: {
+              page: p.page_start || 1,
+              section_title: p.title,
+              category: p.category,
+            },
+          }));
+        }
+      } catch (err) {
+        console.warn('[GraphExtractor] 청크 프로포절 조회 경고:', err);
+      }
+    }
+
+    // 3. 만약 프로포절도 없다면, 스토리지 파일 원본에서 텍스트 파싱
+    if (chunks.length === 0 && doc?.storage_path && supabase) {
+      try {
+        const { data: fileData } = await supabase.storage.from('documents').download(doc.storage_path);
+        if (fileData) {
+          const buffer = Buffer.from(await fileData.arrayBuffer());
+          const parser = getParserForFile(doc.filename || 'document.pdf');
+          const parsed = await parser.parse(buffer, doc.filename || 'document.pdf');
+          if (parsed.pages && parsed.pages.length > 0) {
+            chunks = parsed.pages.map((p, idx) => ({
+              id: `doc-page-${idx + 1}`,
+              chunk_index: idx + 1,
+              content: p.text,
+              metadata: {
+                page: p.pageNumber || idx + 1,
+                section_title: `${doc.title} (Page ${p.pageNumber || idx + 1})`,
+              },
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn('[GraphExtractor] 스토리지 파싱 폴백:', err);
+      }
+    }
+
+    // 4. 만약 스토리지도 없고 비어있다면, 문서 메타데이터 요약이나 텍스트 활용
+    if (chunks.length === 0 && (doc?.metadata?.raw_text || doc?.metadata?.summary_full)) {
+      chunks = [
+        {
+          id: `doc-text-1`,
+          chunk_index: 1,
+          content: doc.metadata?.raw_text || doc.metadata?.summary_full,
+          metadata: { page: 1, section_title: doc.title },
+        },
+      ];
+    }
+
+    // 5. 최후의 폴백 (테스트 환경)
     if (chunks.length === 0) {
       chunks = [
         {
@@ -68,8 +138,10 @@ export class GraphExtractor {
     const createdNodesMap = new Map<string, KnowledgeNode>();
     const createdEdges: KnowledgeEdge[] = [];
 
-    // 청크별 순차 추출
-    for (const chunk of chunks.slice(0, 10)) { // 배치 보호 (최대 10개 청크)
+    // 청크별 순차 추출 (배치 보호: 최대 10개 청크)
+    for (const chunk of chunks.slice(0, 10)) {
+      if (!chunk.content || chunk.content.trim().length < 15) continue;
+
       const prompt = `[도메인]: ${domain}\n[청크 본문 (p.${chunk.metadata?.page || 1})]:\n${chunk.content}`;
 
       let extracted: { nodes: any[]; relations: any[] };
@@ -83,13 +155,15 @@ export class GraphExtractor {
           maxTokens: 2000,
         });
       } catch (err) {
-        // Mock fallback 휴리스틱 생성
+        console.warn(`[GraphExtractor] LLM 추출 실패 (${chunk.id}), 폴백 추출 적용:`, err);
         extracted = this.createFallbackExtraction(chunk.content, domain);
       }
 
       // 1. 노드 정규화 및 등록
       const chunkNodeMap = new Map<string, KnowledgeNode>();
       for (const n of extracted.nodes || []) {
+        if (!n.canonical_name || n.canonical_name.trim().length === 0) continue;
+
         const canonical = EntityNormalizer.getCanonicalName(n.canonical_name);
         const aliases = Array.from(new Set([...(n.aliases || []), ...EntityNormalizer.getAliases(canonical)]));
         const nodeId = `node-${domain}-${canonical.replace(/\s+/g, '_')}`;
@@ -126,14 +200,16 @@ export class GraphExtractor {
               { onConflict: 'domain,canonical_name' }
             );
 
-            await supabase.from('chunk_entities').upsert(
-              {
-                chunk_id: chunk.id,
-                node_id: nodeId,
-                relevance_score: 1.0,
-              },
-              { onConflict: 'chunk_id,node_id' }
-            );
+            if (chunk.id) {
+              await supabase.from('chunk_entities').upsert(
+                {
+                  chunk_id: chunk.id,
+                  node_id: nodeId,
+                  relevance_score: 1.0,
+                },
+                { onConflict: 'chunk_id,node_id' }
+              );
+            }
           } catch (e) {
             console.warn('[GraphExtractor] Node DB upsert 폴백:', e);
           }
@@ -142,13 +218,47 @@ export class GraphExtractor {
 
       // 2. 엣지(관계) 등록 (출처 근거 Provenance 유지 필수)
       for (const r of extracted.relations || []) {
+        if (!r.source_name || !r.target_name) continue;
+
         const srcCanonical = EntityNormalizer.getCanonicalName(r.source_name);
         const tgtCanonical = EntityNormalizer.getCanonicalName(r.target_name);
 
-        const srcNode = createdNodesMap.get(srcCanonical) || chunkNodeMap.get(r.source_name);
-        const tgtNode = createdNodesMap.get(tgtCanonical) || chunkNodeMap.get(r.target_name);
+        // 만약 노드가 명시되지 않은 경우 자동 생성하여 누락 방지
+        let srcNode = createdNodesMap.get(srcCanonical) || chunkNodeMap.get(r.source_name);
+        if (!srcNode) {
+          const srcId = `node-${domain}-${srcCanonical.replace(/\s+/g, '_')}`;
+          srcNode = {
+            id: srcId,
+            canonical_name: srcCanonical,
+            node_type: 'concept',
+            domain,
+            description: `${srcCanonical} 관련 지식 엔티티`,
+            aliases: EntityNormalizer.getAliases(srcCanonical),
+            status: 'APPROVED',
+            created_at: new Date().toISOString(),
+          };
+          this.inMemoryNodes.set(srcId, srcNode);
+          createdNodesMap.set(srcCanonical, srcNode);
+        }
 
-        if (!srcNode || !tgtNode || srcNode.id === tgtNode.id) continue;
+        let tgtNode = createdNodesMap.get(tgtCanonical) || chunkNodeMap.get(r.target_name);
+        if (!tgtNode) {
+          const tgtId = `node-${domain}-${tgtCanonical.replace(/\s+/g, '_')}`;
+          tgtNode = {
+            id: tgtId,
+            canonical_name: tgtCanonical,
+            node_type: 'concept',
+            domain,
+            description: `${tgtCanonical} 관련 지식 엔티티`,
+            aliases: EntityNormalizer.getAliases(tgtCanonical),
+            status: 'APPROVED',
+            created_at: new Date().toISOString(),
+          };
+          this.inMemoryNodes.set(tgtId, tgtNode);
+          createdNodesMap.set(tgtCanonical, tgtNode);
+        }
+
+        if (srcNode.id === tgtNode.id) continue;
 
         const edgeId = `edge-${srcNode.id}-${r.relation_type}-${tgtNode.id}`;
         const edge: KnowledgeEdge = {
@@ -158,8 +268,8 @@ export class GraphExtractor {
           relation_type: r.relation_type,
           document_id: documentId,
           chunk_id: chunk.id,
-          confidence: r.confidence ?? 0.90,
-          evidence_text: r.evidence_text || chunk.content.slice(0, 100),
+          confidence: r.confidence ?? 0.9,
+          evidence_text: r.evidence_text || chunk.content.slice(0, 120),
           status: 'PROPOSED', // 초기에는 제안 상태로 사용자가 검토/확정
           created_at: new Date().toISOString(),
           source_node: srcNode,
@@ -178,16 +288,15 @@ export class GraphExtractor {
           try {
             await supabase.from('knowledge_edges').upsert(
               {
-                id: edgeId,
+                id: edge.id,
                 source_node_id: edge.source_node_id,
                 target_node_id: edge.target_node_id,
                 relation_type: edge.relation_type,
-                document_id: documentId,
-                chunk_id: chunk.id,
+                document_id: edge.document_id,
+                chunk_id: edge.chunk_id,
                 confidence: edge.confidence,
                 evidence_text: edge.evidence_text,
                 status: 'PROPOSED',
-                metadata: edge.metadata,
               },
               { onConflict: 'id' }
             );
@@ -195,18 +304,6 @@ export class GraphExtractor {
             console.warn('[GraphExtractor] Edge DB upsert 폴백:', e);
           }
         }
-      }
-    }
-
-    // 문서 상태를 GRAPH_REVIEW로 승격
-    if (supabase) {
-      try {
-        await supabase
-          .from('documents')
-          .update({ status: 'GRAPH_REVIEW', graph_version: 'v1', updated_at: new Date().toISOString() })
-          .eq('id', documentId);
-      } catch (e) {
-        console.warn('[GraphExtractor] 상태 승격 폴백:', e);
       }
     }
 
@@ -356,10 +453,41 @@ export class GraphExtractor {
       const srcCanonical = EntityNormalizer.getCanonicalName(r.source_name);
       const tgtCanonical = EntityNormalizer.getCanonicalName(r.target_name);
 
-      const srcNode = createdNodesMap.get(srcCanonical) || createdNodesMap.get(r.source_name);
-      const tgtNode = createdNodesMap.get(tgtCanonical) || createdNodesMap.get(r.target_name);
+      let srcNode = createdNodesMap.get(srcCanonical) || createdNodesMap.get(r.source_name);
+      if (!srcNode) {
+        const srcId = `node-${domain}-${srcCanonical.replace(/\s+/g, '_')}`;
+        srcNode = {
+          id: srcId,
+          canonical_name: srcCanonical,
+          node_type: 'concept',
+          domain,
+          description: `${srcCanonical} 관련 지식 엔티티`,
+          aliases: EntityNormalizer.getAliases(srcCanonical),
+          status: 'APPROVED',
+          created_at: new Date().toISOString(),
+        };
+        this.inMemoryNodes.set(srcId, srcNode);
+        createdNodesMap.set(srcCanonical, srcNode);
+      }
 
-      if (!srcNode || !tgtNode || srcNode.id === tgtNode.id) continue;
+      let tgtNode = createdNodesMap.get(tgtCanonical) || createdNodesMap.get(r.target_name);
+      if (!tgtNode) {
+        const tgtId = `node-${domain}-${tgtCanonical.replace(/\s+/g, '_')}`;
+        tgtNode = {
+          id: tgtId,
+          canonical_name: tgtCanonical,
+          node_type: 'concept',
+          domain,
+          description: `${tgtCanonical} 관련 지식 엔티티`,
+          aliases: EntityNormalizer.getAliases(tgtCanonical),
+          status: 'APPROVED',
+          created_at: new Date().toISOString(),
+        };
+        this.inMemoryNodes.set(tgtId, tgtNode);
+        createdNodesMap.set(tgtCanonical, tgtNode);
+      }
+
+      if (srcNode.id === tgtNode.id) continue;
 
       const edgeId = `edge-${srcNode.id}-${r.relation_type}-${tgtNode.id}`;
       const edge: KnowledgeEdge = {

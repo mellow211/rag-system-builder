@@ -88,6 +88,8 @@ export interface ChunkingSession {
   status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
   strategy: string;
   chat_history: Array<{ role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string }>;
+  total_proposals?: number;
+  approved_proposals?: number;
   created_at: string;
   updated_at: string;
 }

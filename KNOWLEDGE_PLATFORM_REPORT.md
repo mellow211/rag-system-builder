@@ -217,8 +217,10 @@ $ npx tsx scripts/test-phase4-5-graph.ts
 
 1. **Supabase 데이터베이스 프로덕션 반영**:
    - Supabase 관리 콘솔의 **SQL Editor**에서 `supabase/migrations/003_knowledge_platform.sql` 스크립트를 실행하여 프로덕션 테이블 및 외래키를 동기화합니다.
-2. **LLM 프로바이더 전환**:
-   - `.env.local` 파일에서 `OPENAI_API_KEY`를 설정하면 시스템이 자동으로 실제 OpenAI 모델(`gpt-4o-mini` 등)로 승격되어 고품질의 자연어 프로파일 및 온톨로지 추출을 수행합니다. (키가 없을 경우 내장 MockProvider가 안정적으로 폴백 동작)
+2. **LLM 프로바이더 연동 및 전환**:
+   - **Replicate API (`REPLICATE_API_TOKEN`)**: 시스템에 `ReplicateLLMProvider`가 탑재되어 `meta/meta-llama-3-8b-instruct`(초고속·저비용) 모델을 통해 실제 문서 텍스트로부터 지식그래프 엔티티/관계 추출 및 동적 대화형 청킹 에이전트 추론을 실시간으로 수행합니다.
+   - **OpenAI API (`OPENAI_API_KEY`)**: `.env.local` 또는 Vercel 환경변수에 `OPENAI_API_KEY`를 설정하면 경제적인 `gpt-4o-mini` 모델로 고정밀 문서 분석 및 에이전트 추론이 자동 활성화됩니다.
+   - **우선순위 자동 감지**: `LLM_PROVIDER` 명시 설정 > `OPENAI_API_KEY` > `REPLICATE_API_TOKEN` > `MockLLMProvider` 순으로 유연하게 폴백 동작합니다.
 3. **개발 서버 기동 및 확인**:
    ```bash
    npm run dev

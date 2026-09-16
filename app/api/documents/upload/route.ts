@@ -152,6 +152,7 @@ export async function POST(req: NextRequest) {
         metadata: {
           keywords,
           description,
+          chunking_version: 'v2',
         },
       })
       .select('*')

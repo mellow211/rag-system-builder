@@ -96,6 +96,7 @@ export async function POST(req: NextRequest) {
         metadata: {
           keywords: Array.isArray(keywords) ? keywords : [],
           description: description?.trim() || null,
+          chunking_version: 'v2',
         },
       })
       .select('id')

@@ -35,6 +35,7 @@ import {
   Network,
   GitBranch,
   AlignLeft,
+  Bot,
 } from 'lucide-react';
 import { OcrProcessingModal, OcrModalProgress } from '@/components/documents/OcrProcessingModal';
 import { DocumentProfileTab } from '@/components/documents/tabs/DocumentProfileTab';
@@ -114,8 +115,14 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
   const [doc, setDoc] = useState<RagDocument>(initialDoc);
   const [dbChunks, setDbChunks] = useState<DocumentChunk[]>(initialChunks);
 
-  // 현재 인덱싱된 버전 판별 ('v2' or 'v1')
-  const currentDbVersion = (doc.metadata?.chunking_version as string) || (initialChunks[0]?.metadata?.chunking_version as string) || 'v1';
+  // 현재 인덱싱된 버전 판별 ('v2' | 'v1' | 'unindexed')
+  const isIndexed = dbChunks.length > 0;
+  const rawVersion = (doc.metadata?.chunking_version as string) || (initialChunks[0]?.metadata?.chunking_version as string);
+  const currentDbVersion: 'v2' | 'v1' | 'unindexed' = !isIndexed
+    ? 'unindexed'
+    : rawVersion === 'v1'
+    ? 'v1'
+    : 'v2';
 
   // 비교 프리뷰 상태
   const [comparison, setComparison] = useState<ComparisonData | null>(null);
@@ -516,10 +523,12 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
         </div>
       )}
 
-      {/* 2. 현재 DB 인덱싱 상태 배너 */}
+      {/* 2. 인덱싱 버전 상태 배너 */}
       <div className={`p-4 rounded-2xl border transition-all ${
         currentDbVersion === 'v2'
           ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+          : currentDbVersion === 'unindexed'
+          ? 'bg-indigo-50/70 border-indigo-200 text-indigo-950'
           : 'bg-amber-50/70 border-amber-200 text-amber-950'
       }`}>
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -527,6 +536,10 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
             {currentDbVersion === 'v2' ? (
               <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
                 <Zap className="w-4 h-4" />
+              </div>
+            ) : currentDbVersion === 'unindexed' ? (
+              <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Sparkles className="w-4 h-4" />
               </div>
             ) : (
               <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -541,9 +554,15 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
                 <span className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold ${
                   currentDbVersion === 'v2'
                     ? 'bg-emerald-200 text-emerald-900'
+                    : currentDbVersion === 'unindexed'
+                    ? 'bg-indigo-200 text-indigo-900'
                     : 'bg-amber-200 text-amber-900'
                 }`}>
-                  {currentDbVersion === 'v2' ? '✨ RAG v2 (Structure-aware)' : '⚠️ v1 (Fixed-size 문자수 분할)'}
+                  {currentDbVersion === 'v2'
+                    ? '✨ RAG v2 (Structure-aware)'
+                    : currentDbVersion === 'unindexed'
+                    ? '📋 RAG v2 준비 (색인 대기)'
+                    : '⚠️ v1 (Fixed-size 문자수 분할)'}
                 </span>
                 <span className="text-[11px] text-slate-500">
                   (총 {dbChunks.length}개 청크 DB 저장됨)
@@ -552,21 +571,45 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
                 {currentDbVersion === 'v2'
                   ? '이 문서는 Heading-aware 구조 분석, 표/목록/의미 단위 보호 및 Context-enriched Embedding이 적용된 최신 v2 청크로 인덱싱되어 있습니다.'
-                  : '이 문서는 이전 v1 고정 문자수 방식으로 저장되어 있습니다. 아래 [Chunking v2] 탭에서 구조 분석 결과를 확인한 후 상단의 [⚡ RAG v2로 재인덱싱] 버튼을 누르면 고품질 청킹으로 업그레이드됩니다.'}
+                  : currentDbVersion === 'unindexed'
+                  ? '문서 프로필이 준비되었으나 아직 데이터베이스에 청크가 색인되지 않았습니다. [2. Chunk 설계] 탭에서 AI 에이전트와 맞춤 분할 규칙을 확인/승인하거나, 즉시 기본 v2 색인을 실행할 수 있습니다.'
+                  : '이 문서는 이전 v1 고정 문자수 방식으로 저장되어 있습니다. [2. Chunk 설계] 탭에서 최신 구조 기반 v2 청크를 승인하거나 상단의 [⚡ 지금 v2로 업그레이드] 버튼을 눌러 고품질 청킹으로 전환하세요.'}
               </p>
             </div>
           </div>
 
-          {currentDbVersion !== 'v2' && (
-            <button
-              onClick={handleReindexV2}
-              disabled={isReindexingV2}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shrink-0 shadow-xs transition-all cursor-pointer"
-            >
-              <Zap className="w-3.5 h-3.5" />
-              지금 v2로 업그레이드
-            </button>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {currentDbVersion === 'unindexed' && (
+              <>
+                <button
+                  onClick={() => setWorkspaceTab('chunk-agent')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shrink-0 shadow-xs transition-all cursor-pointer"
+                >
+                  <Bot className="w-3.5 h-3.5" />
+                  청크 설계하러 가기
+                </button>
+                <button
+                  onClick={handleReindexV2}
+                  disabled={isReindexingV2}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-indigo-700 border border-indigo-200 text-xs font-bold shrink-0 shadow-xs transition-all cursor-pointer"
+                >
+                  {isReindexingV2 ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5 text-indigo-600" />}
+                  즉시 v2 색인
+                </button>
+              </>
+            )}
+
+            {currentDbVersion === 'v1' && (
+              <button
+                onClick={handleReindexV2}
+                disabled={isReindexingV2}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shrink-0 shadow-xs transition-all cursor-pointer"
+              >
+                {isReindexingV2 ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                지금 v2로 업그레이드
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -602,7 +645,11 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
               <span className="text-xs font-normal text-slate-500">개</span>
             </div>
             <div className="text-[11px] text-slate-400 mt-0.5">
-              버전: <span className="font-semibold text-slate-700">{currentDbVersion.toUpperCase()}</span>
+              버전: <span className="font-semibold text-slate-700">{
+                currentDbVersion === 'unindexed'
+                  ? '미색인 (v2 대기)'
+                  : currentDbVersion.toUpperCase()
+              }</span>
             </div>
           </div>
         </div>
@@ -1005,6 +1052,37 @@ export const DocumentDetailClient: React.FC<DocumentDetailClientProps> = ({
         )}
 
         {/* 5-B. 3-Chunk Navigator ([이전 Chunk] [현재 Chunk] [다음 Chunk]) */}
+        {activeTab !== 'compare' && totalActiveChunks === 0 && !isLoadingComparison && (
+          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+              <Layers className="w-6 h-6" />
+            </div>
+            <div className="max-w-md mx-auto space-y-1.5">
+              <h4 className="text-sm font-bold text-slate-800">인덱싱된 청크가 없습니다</h4>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                [2. Chunk 설계 (Agent)] 탭에서 AI 에이전트와 맞춤 분할 전략을 확정하거나, 즉시 기본 RAG v2 색인을 실행할 수 있습니다.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <button
+                onClick={() => setWorkspaceTab('chunk-agent')}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+              >
+                <Bot className="w-3.5 h-3.5" />
+                Chunk 설계 에이전트 이동
+              </button>
+              <button
+                onClick={handleReindexV2}
+                disabled={isReindexingV2}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+              >
+                {isReindexingV2 ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                ⚡ 즉시 v2 청킹 실행
+              </button>
+            </div>
+          </div>
+        )}
+
         {activeTab !== 'compare' && totalActiveChunks > 0 && currentChunk && (
           <div className="space-y-4">
             {/* 상단 컨트롤 바 */}

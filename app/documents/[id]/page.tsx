@@ -107,7 +107,7 @@ export default async function DocumentDetailPage({ params }: DocumentPageProps) 
       }
 
       // 3. 청크 목록 조회 (문서의 활성 chunking_version에 맞추어 우선 조회)
-      const docVersion = (document.metadata?.chunking_version as string) || 'v1';
+      const docVersion = (document.metadata?.chunking_version as string) || 'v2';
       let chunkQuery = supabase
         .from('document_chunks')
         .select('id, document_id, rag_project_id, chunk_index, content, token_count, metadata, created_at')

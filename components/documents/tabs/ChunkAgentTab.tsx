@@ -581,18 +581,40 @@ export const ChunkAgentTab: React.FC<ChunkAgentTabProps> = ({ documentId, onAppl
                           <select
                             value={p.category || '기본'}
                             onChange={(e) => handleQuickCategoryChange(p.id, e.target.value)}
-                            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 text-slate-700 cursor-pointer hover:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 text-slate-700 cursor-pointer hover:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500 max-w-[130px] truncate"
                             title="카테고리 직접 변경"
                           >
-                            <option value="초록">초록</option>
-                            <option value="서론">서론</option>
-                            <option value="연구방법">연구방법</option>
-                            <option value="연구결과">연구결과</option>
-                            <option value="고찰">고찰</option>
-                            <option value="결론">결론</option>
-                            <option value="참고문헌">참고문헌</option>
-                            <option value="임상양생">임상양생</option>
-                            <option value="기본">기본</option>
+                            {/* 현재 카테고리가 기본 목록에 없으면 동적 보존 표시 */}
+                            {p.category && !['개요', '진단평가', '치료프로토콜', '영양식이', '운동재활', '생활수칙', '주의사항', '체질문진', '기거양생', '식이양생', '경혈지압', '초록', '서론', '연구방법', '연구결과', '고찰', '결론', '참고문헌', '기본'].includes(p.category) && (
+                              <option value={p.category}>{p.category}</option>
+                            )}
+                            <optgroup label="건강 & 임상 가이드">
+                              <option value="개요">개요</option>
+                              <option value="진단평가">진단평가</option>
+                              <option value="치료프로토콜">치료프로토콜</option>
+                              <option value="영양식이">영양식이</option>
+                              <option value="운동재활">운동재활</option>
+                              <option value="생활수칙">생활수칙</option>
+                              <option value="주의사항">주의사항</option>
+                            </optgroup>
+                            <optgroup label="전통 양생 & 한의학">
+                              <option value="체질문진">체질문진</option>
+                              <option value="기거양생">기거양생</option>
+                              <option value="식이양생">식이양생</option>
+                              <option value="경혈지압">경혈지압</option>
+                            </optgroup>
+                            <optgroup label="학술 & 연구 논문">
+                              <option value="초록">초록</option>
+                              <option value="서론">서론</option>
+                              <option value="연구방법">연구방법</option>
+                              <option value="연구결과">연구결과</option>
+                              <option value="고찰">고찰</option>
+                              <option value="결론">결론</option>
+                              <option value="참고문헌">참고문헌</option>
+                            </optgroup>
+                            <optgroup label="일반">
+                              <option value="기본">기본</option>
+                            </optgroup>
                           </select>
 
                           {p.status === 'EDITED' && (

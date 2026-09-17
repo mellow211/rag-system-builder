@@ -38,6 +38,7 @@ export class InitialChunkDesigner {
     const fullCleanedText = cleanedPages.map((p) => p.text).join('\n\n');
     const docTitle = doc?.title || doc?.filename || '문서';
     const domain = (doc?.metadata?.domain as string) || (doc?.rag_project_id as string) || 'health';
+    const docType = (doc?.metadata?.document_type as string) || existingProfile?.document_type || '가이드라인';
 
     // 2. [Step 1] 문서 구조 및 표준 섹션 식별
     let identifiedSections: Array<{
@@ -55,22 +56,28 @@ export class InitialChunkDesigner {
       }));
     }
 
-    // 2-B. LLM 개입을 통한 논문/문서 섹션 정밀 식별
+    // 2-B. LLM 개입을 통한 다종 문서(논문/가이드라인/양생/보고서) 섹션 정밀 식별
     if (identifiedSections.length < 2 && fullCleanedText.length > 100) {
       try {
         const outlineSample = fullCleanedText.slice(0, 4000);
         const sectionDetectionPrompt = `[문서 제목]: ${docTitle}
 [문서 분야]: ${domain}
+[문서 유형]: ${docType}
 [문서 초반 텍스트 발췌]:
 ${outlineSample}
 
-위 문서를 정밀 분석하여, 문서의 실제 핵심 섹션(예: 학술 논문의 경우 초록, 서론, 연구방법, 연구결과, 고찰, 결론 / 건강지침서의 경우 개요, 진단, 양생치료, 주의사항 등)을 식별하라.
-모든 본문을 "서론"이나 한 가지 섹션으로 몰아넣지 말고, 본문의 실제 흐름에 맞는 3~7개의 섹션 목록을 구성하라.`;
+위 문서를 정밀 분석하여, 문서의 실제 유형과 맥락에 최적화된 3~7개의 핵심 섹션 목록을 구성하라:
+- 학술 논문: 초록, 서론, 연구방법, 연구결과, 고찰, 결론 등
+- 임상/건강 가이드라인: 개요, 진단평가, 치료프로토콜, 영양식이, 운동재활, 생활수칙, 주의사항 등
+- 전통 양생/한의문진: 체질문진, 기거양생, 식이양생, 경혈지압, 생활수칙 등
+- 일반 업무 보고서/매뉴얼: 개요, 현황분석, 추진계획, 관리수칙 등
+
+절대 모든 본문을 "서론" 하나로 몰아넣거나 문서의 성격에 맞지 않는 획일적 카테고리를 강제하지 말고, 본문의 실제 목차와 대주제 흐름에 맞는 대표 title과 category를 식별하라.`;
 
         const detectionResult = await provider.generateStructured<{
           sections: Array<{ title: string; category: string; description: string }>;
         }>({
-          systemPrompt: '너는 학술 논문 및 전문 건강의학 문서 구조 분석 수석 아키텍트이다. 문서의 실제 목차와 대주제를 정밀하게 분리 식별하라.',
+          systemPrompt: '너는 학술 논문, 임상 가이드라인, 건강정보 매뉴얼, 전통 양생서 등 다양한 문서 구조 분석 수석 아키텍트이다. 문서의 실제 목차와 대주제를 정밀하게 분리 식별하라.',
           prompt: sectionDetectionPrompt,
           schemaName: 'DocumentSectionsDetection',
           schema: {
@@ -81,8 +88,8 @@ ${outlineSample}
                 items: {
                   type: 'object',
                   properties: {
-                    title: { type: 'string', description: '섹션 대표 명칭 (예: "서론: 일주기 생체시계의 기전", "연구 방법 및 대상")' },
-                    category: { type: 'string', description: '섹션 카테고리 (예: "초록", "서론", "연구방법", "연구결과", "고찰", "결론", "임상지침" 중 하나)' },
+                    title: { type: 'string', description: '섹션 대표 명칭 (예: "서론: 일주기 생체시계의 기전", "진단 기준 및 평가", "식이 및 운동 수칙")' },
+                    category: { type: 'string', description: '섹션 카테고리 (예: "개요", "진단평가", "치료프로토콜", "영양식이", "운동재활", "생활수칙", "주의사항", "체질문진", "기거양생", "초록", "서론", "연구방법", "연구결과", "고찰", "결론" 등)' },
                     description: { type: 'string', description: '해당 섹션의 주요 다루는 내용 요약' },
                   },
                   required: ['title', 'category'],
@@ -103,9 +110,9 @@ ${outlineSample}
       }
     }
 
-    // 2-C. 휴리스틱 섹션 식별 폴백 (논문/보고서 패턴 자동 감지)
+    // 2-C. 휴리스틱 섹션 식별 폴백 (문서 유형 및 도메인 자동 적응)
     if (identifiedSections.length < 2) {
-      identifiedSections = this.heuristicIdentifySections(fullCleanedText, docTitle);
+      identifiedSections = this.heuristicIdentifySections(fullCleanedText, docTitle, domain, docType);
     }
 
     // 3. [Step 2 & 3] 섹션별 블록 수집 및 지능형 청크 제안 생성
@@ -171,10 +178,11 @@ ${outlineSample}
       chunkType = 'paragraph';
     };
 
-    // 타겟 토큰 크기 (섹션 특성 반영: 방법/결과는 표·수치 보존 350~450, 서론/고찰은 450~550)
+    // 타겟 토큰 크기 (문서/섹션 특성 반영: 수치/검사/지표는 350, 요약/주의/결론은 300, 프로토콜/양생/식이는 400, 서술은 450)
     const getTargetTokensForCategory = (cat: string) => {
-      if (cat.includes('방법') || cat.includes('결과')) return 380;
-      if (cat.includes('초록') || cat.includes('결론')) return 300;
+      if (cat.includes('방법') || cat.includes('결과') || cat.includes('진단') || cat.includes('검사') || cat.includes('문진') || cat.includes('지표')) return 350;
+      if (cat.includes('초록') || cat.includes('결론') || cat.includes('주의') || cat.includes('요약')) return 300;
+      if (cat.includes('치료') || cat.includes('식이') || cat.includes('운동') || cat.includes('양생') || cat.includes('수칙')) return 400;
       return 450;
     };
 
@@ -202,7 +210,7 @@ ${outlineSample}
         } else {
           // 일반 소제목인 경우
           const detectedCategory = this.normalizeCategoryName(b.text);
-          if (detectedCategory !== currentCategory && this.isKnownAcademicCategory(detectedCategory)) {
+          if (detectedCategory !== currentCategory && this.isKnownSectionCategory(detectedCategory)) {
             flushChunk();
             currentHeading = b.text;
             currentCategory = detectedCategory;
@@ -297,23 +305,49 @@ ${outlineSample}
   }
 
   /**
-   * 학술 섹션 카테고리 정규화
+   * 다종 문서(임상가이드/건강정보/양생/한의문진/논문/보고서) 카테고리 정규화
    */
   public static normalizeCategoryName(title: string): string {
     const t = title.replace(/\s+/g, '');
+
+    // 1. 핵심 학술 IMRaD 및 대제목 (가장 구체적인 연구방법/결과/고찰/결론/초록/서론 우선)
     if (/초록|Abstract/i.test(t)) return '초록';
-    if (/서론|배경|연구배경|Introduction|Background/i.test(t)) return '서론';
-    if (/방법|연구방법|대상및방법|연구대상|Materials|Methods/i.test(t)) return '연구방법';
-    if (/결과|연구결과|실험결과|Results/i.test(t)) return '연구결과';
+    if (/연구방법|실험방법|조사방법|대상및방법|연구대상|Materials|Methods/i.test(t)) return '연구방법';
+    if (/연구결과|실험결과|조사결과|Results/i.test(t)) return '연구결과';
     if (/고찰|논의|Discussion/i.test(t)) return '고찰';
     if (/결론|제언|결어|Conclusion/i.test(t)) return '결론';
     if (/참고문헌|References/i.test(t)) return '참고문헌';
-    if (/치료|처방|양생|관리|가이드/i.test(t)) return '임상양생';
+    if (/서론|연구배경|Introduction|Background/i.test(t)) return '서론';
+
+    // 2. 임상 가이드라인 & 건강정보 카테고리
+    if (/진단|판정|검사|평가기준|임상증상/i.test(t)) return '진단평가';
+    if (/치료|처방|약물|중재|프로토콜|시술/i.test(t)) return '치료프로토콜';
+    if (/운동|신체활동|재활|스트레칭|보행/i.test(t)) return '운동재활';
+    if (/식이|영양|식단|식사|섭취|음식/i.test(t)) return '영양식이';
+    if (/생활수칙|예방|생활습관|관리법|지침/i.test(t)) return '생활수칙';
+    if (/주의사항|금기|부작용|위험요인|경고/i.test(t)) return '주의사항';
+
+    // 3. 전통 양생 & 한의문진 카테고리
+    if (/문진|설문|변증|체질|사상체질|증상평가/i.test(t)) return '한의문진';
+    if (/사시양생|기거양생|기거|일출|조와조기/i.test(t)) return '기거양생';
+    if (/식치|약선|음식양생|섭생/i.test(t)) return '식이양생';
+    if (/경혈|침구|지압|도인|안교|추나/i.test(t)) return '경혈지압';
+
+    // 4. 일반 개요 및 단락
+    if (/방법/i.test(t)) return '연구방법';
+    if (/결과/i.test(t)) return '연구결과';
+    if (/개요|목적|정의|원칙|서술/i.test(t)) return '개요';
+    if (/양생|관리|가이드/i.test(t)) return '임상양생';
+
     return title.slice(0, 15);
   }
 
-  private static isKnownAcademicCategory(cat: string): boolean {
-    return ['초록', '서론', '연구방법', '연구결과', '고찰', '결론', '참고문헌'].includes(cat);
+  private static isKnownSectionCategory(cat: string): boolean {
+    return [
+      '초록', '서론', '연구방법', '연구결과', '고찰', '결론', '참고문헌',
+      '개요', '진단평가', '치료프로토콜', '영양식이', '운동재활', '생활수칙', '주의사항',
+      '한의문진', '기거양생', '식이양생', '경혈지압', '임상양생',
+    ].includes(cat);
   }
 
   private static isSectionKeywordMatch(text: string, category: string): boolean {
@@ -325,46 +359,78 @@ ${outlineSample}
     const firstLine = text.trim().split('\n')[0].trim();
     if (firstLine.length > 35) return null;
     const cat = this.normalizeCategoryName(firstLine);
-    if (this.isKnownAcademicCategory(cat) && !/(?:다|함|됨)\.$/.test(firstLine)) {
+    if (this.isKnownSectionCategory(cat) && !/(?:다|함|됨)\.$/.test(firstLine)) {
       return cat;
     }
     return null;
   }
 
   /**
-   * 휴리스틱 기반 문서 섹션 식별 (논문 7대 구조)
+   * 휴리스틱 기반 문서 섹션 식별 (다종 문서 도메인 및 유형 자동 적응)
    */
   private static heuristicIdentifySections(
     fullText: string,
-    docTitle: string
+    docTitle: string,
+    domain: string = 'health',
+    docType: string = '가이드라인'
   ): Array<{ title: string; category: string }> {
     const sections: Array<{ title: string; category: string }> = [];
 
-    const candidates = [
-      { pattern: /초\s*록|Abstract/i, title: '초록 (Abstract)', category: '초록' },
-      { pattern: /서\s*론|연구\s*배경|Introduction/i, title: '서론 및 연구 배경', category: '서론' },
-      { pattern: /연구\s*방법|대상\s*및\s*방법|Methods/i, title: '연구 방법 및 절차', category: '연구방법' },
-      { pattern: /연구\s*결과|결\s*과|Results/i, title: '연구 결과 분석', category: '연구결과' },
-      { pattern: /고\s*찰|논\s*의|Discussion/i, title: '고찰 및 임상적 의의', category: '고찰' },
-      { pattern: /결\s*론|결론\s*및\s*제언|Conclusion/i, title: '결론 및 종합 제언', category: '결론' },
-    ];
-
-    for (const c of candidates) {
-      if (c.pattern.test(fullText)) {
-        sections.push({ title: c.title, category: c.category });
-      }
-    }
-
-    if (sections.length < 2) {
-      // 일반 보고서 기본 3단 구조
-      return [
-        { title: '1. 서론 및 개요', category: '서론' },
-        { title: '2. 본문 및 핵심 분석', category: '연구결과' },
-        { title: '3. 고찰 및 결론', category: '결론' },
+    // 1. 학술 논문 패턴 후보군
+    if (docType.includes('논문') || /초\s*록|Abstract|연구\s*방법|Materials/i.test(fullText)) {
+      const paperCandidates = [
+        { pattern: /초\s*록|Abstract/i, title: '초록 (Abstract)', category: '초록' },
+        { pattern: /서\s*론|연구\s*배경|Introduction/i, title: '서론 및 연구 배경', category: '서론' },
+        { pattern: /연구\s*방법|대상\s*및\s*방법|Methods/i, title: '연구 방법 및 절차', category: '연구방법' },
+        { pattern: /연구\s*결과|결\s*과|Results/i, title: '연구 결과 분석', category: '연구결과' },
+        { pattern: /고\s*찰|논\s*의|Discussion/i, title: '고찰 및 임상적 의의', category: '고찰' },
+        { pattern: /결\s*론|결론\s*및\s*제언|Conclusion/i, title: '결론 및 종합 제언', category: '결론' },
       ];
+      for (const c of paperCandidates) {
+        if (c.pattern.test(fullText)) sections.push({ title: c.title, category: c.category });
+      }
+      if (sections.length >= 2) return sections;
     }
 
-    return sections;
+    // 2. 전통 양생 및 한의문진 패턴 후보군
+    if (domain === 'yangsaeng' || domain === 'korean-medicine' || /양생|문진|체질|섭생|사상체질/i.test(fullText)) {
+      const yangsaengCandidates = [
+        { pattern: /개\s*요|정\s*의|총\s*론|원\s*칙/i, title: '개요 및 기본 원칙', category: '개요' },
+        { pattern: /문\s*진|체\s*질|변\s*증|진\s*찰/i, title: '체질 감별 및 한의문진', category: '한의문진' },
+        { pattern: /기\s*거|수\s*면|사\s*시|계\s*절/i, title: '기거 및 사시 양생법', category: '기거양생' },
+        { pattern: /식\s*이|식\s*치|섭\s*생|약\s*선/i, title: '식이 양생 및 약선 지침', category: '식이양생' },
+        { pattern: /도\s*인|기\s*공|체\s*조|운\s*동/i, title: '도인 기공 및 신체 활동', category: '운동재활' },
+        { pattern: /경\s*혈|침\s*구|지\s*압|혈\s*자리/i, title: '경혈 지압 및 관리', category: '경혈지압' },
+        { pattern: /주\s*의|금\s*기|경\s*고/i, title: '양생 주의사항 및 금기', category: '주의사항' },
+      ];
+      for (const c of yangsaengCandidates) {
+        if (c.pattern.test(fullText)) sections.push({ title: c.title, category: c.category });
+      }
+      if (sections.length >= 2) return sections;
+    }
+
+    // 3. 건강정보 및 임상 가이드라인 패턴 후보군 (기본)
+    const clinicalCandidates = [
+      { pattern: /개\s*요|배\s*경|원\s*인|현\s*황/i, title: '개요 및 질환 배경', category: '개요' },
+      { pattern: /진\s*단|평\s*가|검\s*사|기\s*준/i, title: '진단 기준 및 임상 평가', category: '진단평가' },
+      { pattern: /치\s*료|처\s*방|중\s*재|프\s*로\s*토\s*콜/i, title: '치료 및 중재 프로토콜', category: '치료프로토콜' },
+      { pattern: /영\s*양|식\s*이|식\s*단|식\s*사/i, title: '식이 영양 지침', category: '영양식이' },
+      { pattern: /운\s*동|신\s*체\s*활\s*동|재\s*활/i, title: '운동 처방 및 재활 수칙', category: '운동재활' },
+      { pattern: /생\s*활\s*수\s*칙|관\s*리\s*법|예\s*방/i, title: '일상 생활 관리 수칙', category: '생활수칙' },
+      { pattern: /주\s*의\s*사\s*항|금\s*기|부\s*작\s*용/i, title: '주의사항 및 이상 반응', category: '주의사항' },
+    ];
+    for (const c of clinicalCandidates) {
+      if (c.pattern.test(fullText)) sections.push({ title: c.title, category: c.category });
+    }
+    if (sections.length >= 2) return sections;
+
+    // 4. 일반 범용 보고서 4단 구조
+    return [
+      { title: '1. 개요 및 배경', category: '개요' },
+      { title: '2. 주요 핵심 지침', category: '생활수칙' },
+      { title: '3. 세부 실천 방안', category: '운동재활' },
+      { title: '4. 권고사항 및 주의사항', category: '주의사항' },
+    ];
   }
 
   private static guessCategoryFromText(
@@ -376,11 +442,20 @@ ${outlineSample}
         return s.category;
       }
     }
+    // 다종 도메인 키워드 매칭
+    if (/문진|설문|체질|변증/i.test(text)) return '한의문진';
+    if (/기거|사시|일주기|조와/i.test(text)) return '기거양생';
+    if (/식치|약선|영양|식이|식단|음식/i.test(text)) return '영양식이';
+    if (/도인|운동|스트레칭|신체활동|재활/i.test(text)) return '운동재활';
+    if (/진단|평가|검사|수치|혈압|혈당/i.test(text)) return '진단평가';
+    if (/치료|처방|약물|프로토콜/i.test(text)) return '치료프로토콜';
+    if (/주의|금기|부작용|경고/i.test(text)) return '주의사항';
+    if (/수칙|예방|생활/i.test(text)) return '생활수칙';
     if (/방법|대상|실험|측정|표본/i.test(text)) return '연구방법';
     if (/결과|유의|통계|증가|감소|표|Table|p</i.test(text)) return '연구결과';
     if (/고찰|논의|기전|임상|연관|의의/i.test(text)) return '고찰';
     if (/결론|제언|요약|시사/i.test(text)) return '결론';
-    return sections[0]?.category || '서론';
+    return sections[0]?.category || '개요';
   }
 
   /**

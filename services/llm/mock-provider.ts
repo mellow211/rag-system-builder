@@ -34,8 +34,35 @@ export class MockLLMProvider implements LLMProvider {
       return this.createMockChunkAgentDecision(text) as unknown as T;
     }
 
-    // DocumentSectionsDetection 요청인지 감지 (다단계 LLM 청크 설계)
+    // DocumentSectionsDetection 요청인지 감지 (다종 문서 다단계 LLM 청크 설계)
     if (req.schemaName === 'DocumentSectionsDetection') {
+      if (text.includes('양생') || text.includes('한의') || text.includes('섭생') || text.includes('체질')) {
+        return {
+          sections: [
+            { title: '1. 개요 및 양생 기본원리', category: '개요', description: '천인상응 및 생명 보양의 대원칙' },
+            { title: '2. 체질 감별 및 한의문진', category: '한의문진', description: '사상체질 및 한열허실 문진 항목' },
+            { title: '3. 사시 기거양생 수칙', category: '기거양생', description: '계절별 수면 및 기거 관리법' },
+            { title: '4. 식이 양생 및 약선 지침', category: '식이양생', description: '체질별 온식 및 제철 식생 가이드' },
+            { title: '5. 도인 기공 및 경혈지압', category: '경혈지압', description: '기혈 순환을 위한 자가 경혈 자극법' },
+            { title: '6. 양생 주의사항 및 금기', category: '주의사항', description: '노년기 섭생 주의 및 금기 수칙' },
+          ],
+        } as unknown as T;
+      }
+
+      if (text.includes('만성질환') || text.includes('가이드라인') || text.includes('지침') || text.includes('운동') || text.includes('영양')) {
+        return {
+          sections: [
+            { title: '1. 개요 및 질환 현황', category: '개요', description: '고령자 주요 만성질환의 유병률과 위험성' },
+            { title: '2. 진단 기준 및 임상 평가', category: '진단평가', description: '혈압, 혈당 등 주요 임상 지표 판정 기준' },
+            { title: '3. 약물 치료 및 중재 프로토콜', category: '치료프로토콜', description: '표준 약물 요법 및 의료진 상담 지침' },
+            { title: '4. 균형 영양 및 식이 지침', category: '영양식이', description: '단백질 섭취 기준 및 저염식 식단 수칙' },
+            { title: '5. 단계별 운동 처방 및 수칙', category: '운동재활', description: '낙상 예방 근력 및 유산소 운동 프로그램' },
+            { title: '6. 일상생활 관리 및 주의사항', category: '주의사항', description: '가정 내 안전 수칙 및 응급 상황 대처법' },
+          ],
+        } as unknown as T;
+      }
+
+      // 학술 논문 기본 반환
       return {
         sections: [
           { title: '초록', category: '초록', description: '연구 요약 및 핵심 결론' },

@@ -226,6 +226,78 @@ export class ChunkAgentTools {
   }
 
   /**
+   * Tool 7-B: batchUpdateCategories - 복수 청크 카테고리 일괄 갱신 (인덱스 목록 기반)
+   */
+  public static async batchUpdateCategories(
+    documentId: string,
+    chunkIndices: number[],
+    newCategory: string
+  ): Promise<ChunkProposal[]> {
+    const proposals = await this.getProposals(documentId);
+    const indicesSet = new Set(chunkIndices);
+
+    for (const p of proposals) {
+      if (indicesSet.has(p.proposed_index)) {
+        p.category = newCategory.trim();
+        p.status = 'EDITED';
+      }
+    }
+
+    await this.saveProposals(documentId, proposals);
+    return proposals;
+  }
+
+  /**
+   * Tool 7-C: reclassifyAll - 전체 또는 다수 청크의 카테고리/제목 맵 기반 일괄 재분류
+   */
+  public static async reclassifyAll(
+    documentId: string,
+    categoriesMap: Record<string, string>,
+    titlesMap?: Record<string, string>
+  ): Promise<ChunkProposal[]> {
+    const proposals = await this.getProposals(documentId);
+
+    for (const p of proposals) {
+      const key = String(p.proposed_index);
+      if (categoriesMap[key]) {
+        p.category = categoriesMap[key].trim();
+        p.status = 'EDITED';
+      }
+      if (titlesMap && titlesMap[key]) {
+        p.title = titlesMap[key].trim();
+        p.status = 'EDITED';
+      }
+    }
+
+    await this.saveProposals(documentId, proposals);
+    return proposals;
+  }
+
+  /**
+   * Tool 7-D: updateProposal - 개별 청크의 제목/카테고리/내용 부분 갱신
+   */
+  public static async updateProposal(
+    documentId: string,
+    proposalId: string,
+    updates: { title?: string; category?: string; proposed_content?: string }
+  ): Promise<ChunkProposal> {
+    const proposals = await this.getProposals(documentId);
+    const target = proposals.find((p) => p.id === proposalId);
+    if (!target) throw new Error(`청크 ${proposalId}를 찾을 수 없습니다.`);
+
+    if (updates.title) target.title = updates.title.trim();
+    if (updates.category) target.category = updates.category.trim();
+    if (updates.proposed_content) {
+      target.proposed_content = updates.proposed_content;
+      target.token_count = TokenCounter.count(updates.proposed_content);
+    }
+    target.status = 'EDITED';
+
+    await this.saveProposals(documentId, proposals);
+    return target;
+  }
+
+  /**
    * Tool 8: setChunkType - 청크 타입 지정 (table, list, qa, paragraph 등)
    */
   public static async setChunkType(
@@ -279,6 +351,15 @@ export class ChunkAgentTools {
   }
 
   public static async saveProposals(documentId: string, proposals: ChunkProposal[]): Promise<void> {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    // UUID 무결성 확보
+    for (const p of proposals) {
+      if (!p.id || !uuidPattern.test(p.id)) {
+        p.id = crypto.randomUUID();
+      }
+    }
+
     this.inMemoryProposals.set(documentId, proposals);
 
     if (isSupabaseAdminConfigured()) {
@@ -287,21 +368,25 @@ export class ChunkAgentTools {
         // 일괄 삭제 후 재저장 (순서 보장)
         await supabase.from('chunk_proposals').delete().eq('document_id', documentId);
 
-        const rows = proposals.map((p) => ({
-          session_id: p.session_id,
-          document_id: documentId,
-          proposed_index: p.proposed_index,
-          section_path: p.section_path,
-          title: p.title,
-          proposed_content: p.proposed_content,
-          token_count: p.token_count,
-          chunk_type: p.chunk_type,
-          category: p.category,
-          page_start: p.page_start,
-          page_end: p.page_end,
-          parent_id: p.parent_id || null,
-          status: p.status,
-        }));
+        const rows = proposals.map((p) => {
+          const validSessionId = p.session_id && uuidPattern.test(p.session_id) ? p.session_id : null;
+          return {
+            id: p.id,
+            session_id: validSessionId,
+            document_id: documentId,
+            proposed_index: p.proposed_index,
+            section_path: p.section_path,
+            title: p.title,
+            proposed_content: p.proposed_content,
+            token_count: p.token_count,
+            chunk_type: p.chunk_type,
+            category: p.category,
+            page_start: p.page_start,
+            page_end: p.page_end,
+            parent_id: p.parent_id && uuidPattern.test(p.parent_id) ? p.parent_id : null,
+            status: p.status,
+          };
+        });
 
         const batchSize = 50;
         for (let i = 0; i < rows.length; i += batchSize) {

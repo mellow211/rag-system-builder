@@ -59,39 +59,45 @@ export class BlockParser {
         continue;
       }
 
-      // 5. 헤딩(Heading) 감지
-      const firstLine = trimmed.split('\n')[0].trim();
-      const headingCandidate = HeadingDetector.detect(firstLine, true);
+      // 5. 헤딩(Heading) 및 단락 분할 처리
+      const lines = trimmed.split('\n');
+      let currentParaLines: string[] = [];
 
-      if (headingCandidate && headingCandidate.confidence >= HeadingDetector.CONFIDENCE_THRESHOLD) {
-        // 첫 줄이 헤딩이고, 뒤에 본문이 함께 있다면 헤딩과 본문을 분리
-        const restOfParagraph = trimmed.slice(firstLine.length).trim();
+      for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const line = lines[lineIdx].trim();
+        if (!line) continue;
 
-        blocks.push({
-          type: 'heading',
-          text: headingCandidate.text,
-          level: headingCandidate.level,
-          confidence: headingCandidate.confidence,
-          pageNumber,
-          metadata: { pattern: headingCandidate.patternType },
-        });
+        const headingCandidate = HeadingDetector.detect(line, lineIdx === 0);
+        if (headingCandidate && headingCandidate.confidence >= HeadingDetector.CONFIDENCE_THRESHOLD) {
+          if (currentParaLines.length > 0) {
+            blocks.push({
+              type: 'paragraph',
+              text: currentParaLines.join('\n'),
+              pageNumber,
+            });
+            currentParaLines = [];
+          }
 
-        if (restOfParagraph) {
           blocks.push({
-            type: 'paragraph',
-            text: restOfParagraph,
+            type: 'heading',
+            text: headingCandidate.text,
+            level: headingCandidate.level,
+            confidence: headingCandidate.confidence,
             pageNumber,
+            metadata: { pattern: headingCandidate.patternType },
           });
+        } else {
+          currentParaLines.push(line);
         }
-        continue;
       }
 
-      // 6. 일반 본문 단락(Paragraph)
-      blocks.push({
-        type: 'paragraph',
-        text: trimmed,
-        pageNumber,
-      });
+      if (currentParaLines.length > 0) {
+        blocks.push({
+          type: 'paragraph',
+          text: currentParaLines.join('\n'),
+          pageNumber,
+        });
+      }
     }
 
     return blocks;

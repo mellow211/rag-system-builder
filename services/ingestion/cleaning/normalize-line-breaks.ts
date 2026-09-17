@@ -20,14 +20,17 @@ export function normalizeLineBreaks(text: string): string {
     const lines = para.split('\n');
     if (lines.length <= 1) return para;
 
-    // 헤딩, 표, 목록, Q&A는 줄바꿈을 그대로 유지해야 함
+    // 헤딩, 표, 목록, Q&A, 대괄호 섹션, 학술 헤딩은 줄바꿈을 그대로 유지해야 함
     const isSpecialBlock = lines.some((line) => {
       const trimmed = line.trim();
       return (
         trimmed.startsWith('#') ||
         trimmed.startsWith('|') ||
+        trimmed.startsWith('[') ||
         /^[-*•]\s+/.test(trimmed) ||
         /^\d+[\).]\s+/.test(trimmed) ||
+        /^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVXLCDM]+\.?\s+/.test(trimmed) ||
+        /^(?:초록|서\s*론|연구\s*방법|연구\s*결과|결\s*과|고\s*찰|논\s*의|결\s*론|참고\s*문헌|Abstract|Introduction|Methods|Results|Discussion|Conclusion)/i.test(trimmed) ||
         /^Q[:.]/i.test(trimmed) ||
         /^A[:.]/i.test(trimmed)
       );

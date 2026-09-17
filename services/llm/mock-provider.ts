@@ -34,6 +34,20 @@ export class MockLLMProvider implements LLMProvider {
       return this.createMockChunkAgentDecision(text) as unknown as T;
     }
 
+    // DocumentSectionsDetection 요청인지 감지 (다단계 LLM 청크 설계)
+    if (req.schemaName === 'DocumentSectionsDetection') {
+      return {
+        sections: [
+          { title: '초록', category: '초록', description: '연구 요약 및 핵심 결론' },
+          { title: '서론: 고령화와 일주기 생체시계 퇴행', category: '서론', description: '생체시계 퇴행 및 연구 배경' },
+          { title: '연구 방법: 피험자 선정 및 생체신호 측정', category: '연구방법', description: '피험자 및 실험 중재 절차' },
+          { title: '연구 결과: 수면 효율 및 멜라토닌 분비 정상화', category: '연구결과', description: '수면 효율 및 멜라토닌 지표' },
+          { title: '고찰: 한의학적 양생 및 광생물학적 기전 융합', category: '고찰', description: '한의학적 기전 및 광생물학 융합' },
+          { title: '결론 및 제언', category: '결론', description: '최종 결론 및 비약물적 치료 권고' },
+        ],
+      } as unknown as T;
+    }
+
     // 기본 빈 JSON 구조 (스키마 기준 기본값 조합)
     const fallback: Record<string, unknown> = {};
     if (req.schema.properties) {
@@ -259,43 +273,94 @@ export class MockLLMProvider implements LLMProvider {
   }
 
   private createMockChunkAgentDecision(prompt: string) {
-    const userMatch = prompt.match(/\[사용자 최신 요청\]:\s*["']?([^"'\n]+)/i);
-    const target = (userMatch ? userMatch[1] : prompt).toLowerCase();
+    const userMatch = prompt.match(/\[사용자 최신 요청\]:\s*\n?["']?(.*?)["']?$/m) || prompt.match(/\[사용자 최신 요청\]:\s*(.+)$/m);
+    const target = userMatch ? userMatch[1].replace(/^["']|["']$/g, '').trim() : prompt;
+    const lower = target.toLowerCase();
 
-    if (target.includes('승인') || target.includes('확정') || target.includes('적용') || target.includes('좋아') || target.includes('approve')) {
+    // 1. 카테고리 범위 변경 ("1번부터 2번까지 연구방법으로 변경해줘", "2~3번 연구결과로")
+    const rangeMatch = target.match(
+      /(\d+)\s*(?:번)?\s*(?:부터|~|-)\s*(\d+)\s*(?:번)?\s*(?:까지)?\s*(?:카테고리\s*)?([가-힣a-zA-Z0-9_\s>]+?)(?:으로|로)?\s*(?:바꿔|변경|수정|지정)/i
+    ) || target.match(
+      /(\d+)\s*(?:번)?\s*(?:부터|~|-)\s*(\d+)\s*(?:번)?\s*(?:까지)?\s*(?:카테고리\s*)?(연구\s*방법|연구\s*결과|결과|고찰|서론|결론|초록|[가-힣a-zA-Z]+)(?:으로|로)/i
+    );
+    if (rangeMatch) {
+      const start = Math.min(Number(rangeMatch[1]), Number(rangeMatch[2]));
+      const end = Math.max(Number(rangeMatch[1]), Number(rangeMatch[2]));
+      const category = rangeMatch[3].replace(/\s+/g, '');
+      const indices: number[] = [];
+      for (let i = start; i <= end; i++) indices.push(i);
+
+      return {
+        thought: `청크 ${start}번부터 ${end}번까지 카테고리를 '${category}'로 변경 감지`,
+        actions: [{ type: 'change_category', chunk_indices: indices, new_category: category }],
+        reply_message: `청크 #${indices.join(', #')}의 카테고리를 '${category}'로 변경하였습니다.`,
+      };
+    }
+
+    // 2. 제목 변경 ("2번 청크 제목 '피험자 선정 기준'으로")
+    if (target.includes('제목') || target.includes('이름') || target.includes('rename')) {
+      const titleQuoteMatch = target.match(/(\d+)\s*(?:번)?.*?제목.*?['"‘“](.*?)['"’”]/i) || target.match(/(\d+)\s*(?:번)?.*?제목\s*(?:을|를|은|는)?\s*([^\s]+(?: [^\s]+)?)(?:으로|로)?\s*(?:바꿔|변경|수정)/i);
+      if (titleQuoteMatch) {
+        const idx = Number(titleQuoteMatch[1]);
+        const newTitle = titleQuoteMatch[2].trim();
+        return {
+          thought: `청크 ${idx}번 제목을 '${newTitle}'로 변경`,
+          actions: [{ type: 'rename', chunk_index: idx, new_title: newTitle }],
+          reply_message: `청크 #${idx}의 제목을 '${newTitle}'로 변경하였습니다.`,
+        };
+      }
+    }
+
+    // 3. 단일/목록 카테고리 변경 ("2번 연구방법으로")
+    const singleCatMatch = target.match(/(\d+)\s*번.*?(연구\s*방법|연구\s*결과|결과|고찰|서론|결론|초록|[가-힣a-zA-Z]+)(?:으로|로)?\s*(?:바꿔|변경|수정)/i);
+    if (singleCatMatch) {
+      const idx = Number(singleCatMatch[1]);
+      const cat = singleCatMatch[2].replace(/\s+/g, '');
+      return {
+        thought: `청크 ${idx}번 카테고리를 '${cat}'로 변경`,
+        actions: [{ type: 'change_category', chunk_indices: [idx], new_category: cat }],
+        reply_message: `청크 #${idx}의 카테고리를 '${cat}'로 변경하였습니다.`,
+      };
+    }
+
+    // 4. 전체 카테고리 재분류
+    if (target.includes('서론으로') || target.includes('재분류') || target.includes('다시 분류')) {
+      return {
+        thought: '전체 카테고리 재분류 요청 감지',
+        actions: [
+          {
+            type: 'reclassify_all',
+            categories_map: { '1': '초록', '2': '연구방법' },
+          },
+        ],
+        reply_message: '전체 청크를 학술 흐름에 맞추어 [초록, 연구방법, 결과]로 재분류하였습니다.',
+      };
+    }
+
+    if (lower.includes('승인') || lower.includes('확정') || lower.includes('적용') || lower.includes('좋아') || lower.includes('approve')) {
       return {
         thought: '사용자가 청크 계획 승인을 요청함',
-        action: 'approve_all',
+        actions: [{ type: 'approve_all' }],
         reply_message: '모든 청크 구조가 최종 승인되었습니다! 상단의 [승인 적용 및 RAG Index 생성] 버튼을 누르면 인덱싱이 완료됩니다.',
       };
     }
-    if (target.includes('합쳐') || target.includes('묶어') || target.includes('merge')) {
+    if (lower.includes('합쳐') || lower.includes('묶어') || lower.includes('merge')) {
       return {
         thought: '사용자가 청크 병합을 요청함',
-        action: 'merge',
-        action_params: { chunk_indices: [1, 2], new_title: '병합된 통합 청크' },
+        actions: [{ type: 'merge', chunk_indices: [1, 2], new_title: '병합된 통합 청크' }],
         reply_message: '요청하신 청크들을 하나로 병합하였습니다.',
       };
     }
-    if (target.includes('나눠') || target.includes('분할') || target.includes('split')) {
+    if (lower.includes('나눠') || lower.includes('분할') || lower.includes('split')) {
       return {
         thought: '사용자가 청크 분할을 요청함',
-        action: 'split',
-        action_params: { chunk_index: 1, sub_titles: ['전반부 세부 내용', '후반부 세부 내용'] },
+        actions: [{ type: 'split', chunk_index: 1, sub_titles: ['전반부 세부 내용', '후반부 세부 내용'] }],
         reply_message: '선택하신 청크를 2개의 세부 청크로 분할하였습니다.',
-      };
-    }
-    if (target.includes('제목') || target.includes('이름') || target.includes('rename')) {
-      return {
-        thought: '사용자가 청크 제목 변경을 요청함',
-        action: 'rename',
-        action_params: { chunk_index: 1, new_title: '전문가 검토 핵심 청크' },
-        reply_message: '청크 제목을 전문가 검토 명칭으로 변경하였습니다.',
       };
     }
     return {
       thought: '일반 문의 또는 청킹 조언 요청',
-      action: 'none',
+      actions: [{ type: 'none' }],
       reply_message: '문서의 주요 맥락과 의미 단락에 맞추어 청크를 분석 중입니다. 특정 청크의 분할이나 병합, 제목 변경을 요청하시면 즉시 반영하겠습니다.',
     };
   }

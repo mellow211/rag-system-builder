@@ -23,6 +23,18 @@ export class HeadingDetector {
       };
     }
 
+    // 2-A. 학술 논문 및 표준 보고서 핵심 섹션 표제어 (초록, 서론, 연구방법, 결과, 고찰, 결론, 참고문헌 등 - 괄호/콜론 지원)
+    const academicSectionPattern = /^(?:\[|\(|<)?(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVXLCDM\d가-하]+\.?\s*)?(초록|서\s*론|연구\s*배경|연구\s*목적|연구\s*방법|연구\s*대상\s*및\s*방법|대상\s*및\s*방법|방\s*법|재료\s*및\s*방법|연구\s*결과|결\s*과|고\s*찰|논\s*의|결\s*론|결론\s*및\s*제언|참고\s*문헌|Abstract|Introduction|Background|Methods|Materials\s+and\s+Methods|Results|Discussion|Conclusion|Conclusions|References)(?::|\.|\b|\]|\)|>|\s|$)/i;
+    const academicMatch = trimmed.match(academicSectionPattern);
+    if (academicMatch && trimmed.length <= 60 && !/(?:다|함|됨|임|함\.|됨\.|다\.)$/.test(trimmed)) {
+      return {
+        text: trimmed.replace(/^[\[(<]|[\])>]$/g, '').trim(),
+        level: 1,
+        confidence: 0.96,
+        patternType: 'academic_section_heading',
+      };
+    }
+
     // 2. 한국어 법령/지침서 제N장, 제N절 구조
     if (/^제\s*\d+\s*[장편부]\s*(.*)$/.test(trimmed)) {
       return {
@@ -108,8 +120,8 @@ export class HeadingDetector {
       };
     }
 
-    // 8. 대괄호 헤딩: "[머리말]", "[고령자 수면 수칙]"
-    const bracketMatch = trimmed.match(/^\[([가-힣a-zA-Z0-9\s]{2,30})\]$/);
+    // 8. 대괄호 헤딩: "[머리말]", "[고령자 수면 수칙]", "[서론: 연구 배경]"
+    const bracketMatch = trimmed.match(/^\[([가-힣a-zA-Z0-9\s:,.\-_/]{2,50})\]$/);
     if (bracketMatch) {
       // Q&A 문진 표기는 Q&A 블록에서 별도 처리하도록 제외
       if (bracketMatch[1].includes('문진') || bracketMatch[1].includes('Q&A')) {
@@ -118,7 +130,7 @@ export class HeadingDetector {
       return {
         text: bracketMatch[1].trim(),
         level: 2,
-        confidence: 0.78,
+        confidence: 0.88,
         patternType: 'bracketed_heading',
       };
     }

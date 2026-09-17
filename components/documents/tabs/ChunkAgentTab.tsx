@@ -135,6 +135,49 @@ export const ChunkAgentTab: React.FC<ChunkAgentTabProps> = ({ documentId, onAppl
     }
   };
 
+  // 단일 청크 카테고리 빠른 변경
+  const handleQuickCategoryChange = async (proposalId: string, newCategory: string) => {
+    try {
+      const res = await fetch(`/api/documents/${documentId}/chunk-agent/proposals/${proposalId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: newCategory, status: 'EDITED' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProposals((prev) =>
+          prev.map((p) => (p.id === proposalId ? { ...p, category: newCategory, status: 'EDITED' } : p))
+        );
+        setNotice({ type: 'success', message: `청크 카테고리가 '${newCategory}'(으)로 변경되었습니다.` });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // 단일 청크 제목 빠른 변경
+  const handleQuickRename = async (proposalId: string, currentTitle: string) => {
+    const newTitle = prompt('수정할 청크 제목을 입력하세요:', currentTitle);
+    if (!newTitle || newTitle.trim() === currentTitle) return;
+
+    try {
+      const res = await fetch(`/api/documents/${documentId}/chunk-agent/proposals/${proposalId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle.trim(), status: 'EDITED' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProposals((prev) =>
+          prev.map((p) => (p.id === proposalId ? { ...p, title: newTitle.trim(), status: 'EDITED' } : p))
+        );
+        setNotice({ type: 'success', message: `청크 제목이 '${newTitle.trim()}'(으)로 변경되었습니다.` });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // 청크 분할 도구 실행
   const handleSplit = async (proposalId: string) => {
     const subTitle1 = prompt('분할할 첫 번째 파트 제목:', '세부 주제 A');
@@ -523,10 +566,41 @@ export const ChunkAgentTab: React.FC<ChunkAgentTabProps> = ({ documentId, onAppl
                         <span className="w-6 h-6 rounded-lg bg-white border border-slate-200 text-slate-700 flex items-center justify-center font-mono font-bold text-[11px]">
                           #{p.proposed_index}
                         </span>
-                        <span className="font-bold text-slate-900">{p.title}</span>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 text-slate-600">
-                          {p.category || '기본'}
+                        <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                          {p.title}
+                          <button
+                            onClick={() => handleQuickRename(p.id, p.title)}
+                            title="제목 수정"
+                            className="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-blue-600 transition-colors cursor-pointer"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
                         </span>
+
+                        <div className="flex items-center gap-1">
+                          <select
+                            value={p.category || '기본'}
+                            onChange={(e) => handleQuickCategoryChange(p.id, e.target.value)}
+                            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 text-slate-700 cursor-pointer hover:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                            title="카테고리 직접 변경"
+                          >
+                            <option value="초록">초록</option>
+                            <option value="서론">서론</option>
+                            <option value="연구방법">연구방법</option>
+                            <option value="연구결과">연구결과</option>
+                            <option value="고찰">고찰</option>
+                            <option value="결론">결론</option>
+                            <option value="참고문헌">참고문헌</option>
+                            <option value="임상양생">임상양생</option>
+                            <option value="기본">기본</option>
+                          </select>
+
+                          {p.status === 'EDITED' && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              수정됨
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-1.5">

@@ -176,8 +176,8 @@ export class BlockParser {
       };
     }
 
-    // 3. 대괄호 제목 (예: [머리말], [결어 및 참고문헌])
-    const bracketMatch = line.match(/^\[([가-힣a-zA-Z0-9\s]{2,30})\]$/);
+    // 3. 대괄호 제목 (예: [머리말], [서론: 연구 배경], [연구 방법: 대상자 선정])
+    const bracketMatch = line.match(/^\[([가-힣a-zA-Z0-9\s:,.\-_/]{2,50})\]$/);
     if (bracketMatch) {
       return {
         isHeading: true,
@@ -189,7 +189,12 @@ export class BlockParser {
     // 4. 마침표 없는 짧은 단독 행 (35자 이하, 한자/한글 포함)
     if (line.length <= 35 && !line.includes('.') && !line.includes(',') && /^[가-힣a-zA-Z0-9\s\u4E00-\u9FFF]{2,35}$/.test(line)) {
       // 일반 대화나 명사구 제목인 경우
-      const commonTitleKeywords = ['머리말', '서론', '본론', '결어', '결론', '고찰', '참고문헌', '요약', '개요', '원칙', '지침', '방법'];
+      const commonTitleKeywords = [
+        '머리말', '초록', '서론', '서 론', '본론', '연구방법', '연구 방법', '대상 및 방법',
+        '연구배경', '연구목적', '재료 및 방법', '결어', '결과', '연구결과', '연구 결과',
+        '고찰', '고 찰', '논의', '결론', '결 론', '참고문헌', '요약', '개요', '원칙', '지침', '방법',
+        'Abstract', 'Introduction', 'Methods', 'Results', 'Discussion', 'Conclusion', 'References'
+      ];
       if (commonTitleKeywords.some((k) => line.includes(k))) {
         return {
           isHeading: true,
